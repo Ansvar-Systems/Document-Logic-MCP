@@ -10,19 +10,15 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy requirements
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 # Copy source code
 COPY src/ /app/src/
 COPY pyproject.toml /app/
 
-# Install package
-RUN pip install -e .
+# Install package with dev dependencies
+RUN pip install -e ".[dev]"
 
 # Create data directory
 RUN mkdir -p /app/data
 
 # Run MCP server
-CMD ["python", "-m", "src.document_logic_mcp.server"]
+CMD ["python", "-m", "document_logic_mcp.server"]
