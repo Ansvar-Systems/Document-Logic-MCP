@@ -37,19 +37,41 @@ Section: {section_title}
 Content:
 {section_content}
 
-Extract:
-1. **Truths** - Factual statements (what IS, not what's planned or required)
-2. **Plans** - Future intentions (what WILL BE done)
-3. **Requirements** - Obligations (what MUST BE done)
-4. **Recommendations** - Suggestions (what SHOULD BE done)
-5. **Entities** - Systems, technologies, people, organizations, data mentioned
-6. **Relationships** - How entities relate (stores, integrates with, depends on, etc.)
+Extract ALL factual statements from this section. Be comprehensive, not selective.
 
-For each truth/plan/requirement/recommendation:
-- Extract the exact statement
-- Identify entities involved
-- Classify statement type
-- Estimate confidence (0.0-1.0)
+**What to extract:**
+- System architecture (components, topology, transaction volumes, latency targets)
+- Component specifications (versions, configurations, capacities, limits)
+- Configuration values (timeouts, thresholds, rate limits, rotation schedules)
+- Integration details (which vendor, which API, what protocol, what data flows)
+- Operational processes (monitoring intervals, retention periods, update schedules)
+- Security controls (encryption, authentication, access control, key management)
+- Data characteristics (volumes, sensitivity, retention, locations)
+- Performance metrics (throughput, latency, availability targets)
+- Constraints and limitations (known issues, deprecated features, planned changes)
+
+**Statement types:**
+1. **Assertions** - Current facts (what IS): "System processes 10,000 transactions daily"
+2. **Plans** - Future intentions (what WILL BE): "MFA planned for Q3 2024"
+3. **Requirements** - Obligations (what MUST BE): "All data must be encrypted at rest"
+4. **Recommendations** - Suggestions (what SHOULD BE): "Consider implementing rate limiting"
+
+For each statement:
+- Extract the exact quote or paraphrase faithfully
+- Classify statement type based on tense/language
+- Identify related entities (systems, technologies, data, etc.)
+- Estimate confidence (0.0-1.0) - lower if vague or ambiguous
+- Note source location (page, paragraph if available)
+
+**Critical instructions:**
+- Extract EVERY factual statement, not just "important" ones
+- Include quantitative details: numbers, timeouts, limits, schedules, versions
+- Include architectural details even if not explicitly "security controls"
+- **INCLUDE NEGATIVE STATEMENTS**: "No incident response plan", "MFA not yet implemented", "Penetration testing not performed"
+  Negative statements are truths - capture what is explicitly absent or not yet done
+- Don't filter for relevance - extract everything, let workflow agents decide what matters
+- Use exact quotes where possible
+- Lower confidence if statement is vague, ambiguous, or inferred
 
 Return JSON:
 {{
