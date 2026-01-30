@@ -27,8 +27,12 @@ class DOCXParser(BaseParser):
 
             raw_text.append(text)
 
-            # Detect headings by style
-            if para.style.name.startswith('Heading'):
+            # Detect headings by style (handle missing styles gracefully)
+            is_heading = False
+            if para.style and para.style.name and para.style.name.startswith('Heading'):
+                is_heading = True
+
+            if is_heading:
                 # Save previous section
                 if current_section_title:
                     sections.append(Section(
