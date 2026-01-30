@@ -64,12 +64,12 @@ class DocumentExtractor:
             LLM response text
         """
         if self.gateway_url:
-            # Gateway mode - call LLM Gateway
+            # Gateway mode - call LLM Gateway with service API key
             async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
-                    f"{self.gateway_url}/chat/completions",
+                    f"{self.gateway_url}/api/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {self.gateway_token}",
+                        "X-Service-API-Key": self.gateway_token,
                         "Content-Type": "application/json"
                     },
                     json={
