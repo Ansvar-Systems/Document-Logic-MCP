@@ -77,6 +77,25 @@ def create_server() -> Server:
                     "required": ["entity_name"]
                 }
             ),
+            Tool(
+                name="export_assessment",
+                description="Export assessment as JSON, SQLite, or Markdown. Deliverable for clients.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "enum": ["json", "sqlite", "markdown"],
+                            "description": "Export format"
+                        },
+                        "output_path": {
+                            "type": "string",
+                            "description": "Path to save export file"
+                        }
+                    },
+                    "required": ["format", "output_path"]
+                }
+            ),
         ]
 
     @server.call_tool()
@@ -109,6 +128,25 @@ def create_server() -> Server:
             query_engine = QueryEngine(db)
             result = await query_engine.get_entity_aliases(arguments["entity_name"])
             return [TextContent(type="text", text=str(result))]
+
+        elif name == "export_assessment":
+            from .export import AssessmentExporter
+            db = Database(DEFAULT_DB_PATH)
+            exporter = AssessmentExporter(db)
+
+            format_type = arguments["format"]
+            output_path = Path(arguments["output_path"])
+
+            if format_type == "json":
+                result_path = await exporter.export_json(output_path)
+            elif format_type == "sqlite":
+                result_path = await exporter.export_sqlite(output_path)
+            elif format_type == "markdown":
+                result_path = await exporter.export_markdown(output_path)
+            else:
+                raise ValueError(f"Unknown format: {format_type}")
+
+            return [TextContent(type="text", text=f"Exported to {result_path}")]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
