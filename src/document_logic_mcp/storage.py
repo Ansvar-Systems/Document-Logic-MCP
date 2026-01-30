@@ -2,7 +2,7 @@
 
 import uuid
 import logging
-from typing import List
+from typing import List, Optional
 from .database import Database
 from .extraction.schemas import (
     ExtractedTruth,
@@ -10,6 +10,7 @@ from .extraction.schemas import (
     ExtractedRelationship,
     SourceAuthority,
 )
+from .embeddings import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,17 @@ logger = logging.getLogger(__name__)
 class ExtractionStorage:
     """Store extraction results in database."""
 
-    def __init__(self, db: Database):
-        """Initialize with database."""
+    def __init__(self, db: Database, embedding_service: Optional[EmbeddingService] = None):
+        """
+        Initialize with database and optional embedding service.
+
+        Args:
+            db: Database instance
+            embedding_service: Optional embedding service for semantic search.
+                              If None, embeddings won't be generated.
+        """
         self.db = db
+        self.embedding_service = embedding_service
 
     async def store_truths(
         self,
@@ -27,17 +36,34 @@ class ExtractionStorage:
         truths: List[ExtractedTruth],
         source_authority: SourceAuthority = SourceAuthority.HIGH
     ):
-        """Store extracted truths."""
+        """Store extracted truths with optional embeddings."""
+        # Generate embeddings for batch efficiency
+        embeddings = []
+        if self.embedding_service:
+            try:
+                statements = [truth.statement for truth in truths]
+                embedding_vectors = self.embedding_service.embed_batch(statements)
+                embeddings = [
+                    self.embedding_service.serialize_embedding(vec)
+                    for vec in embedding_vectors
+                ]
+                logger.info(f"Generated embeddings for {len(truths)} truths")
+            except Exception as e:
+                logger.warning(f"Failed to generate embeddings: {e}. Storing without embeddings.")
+                embeddings = [None] * len(truths)
+        else:
+            embeddings = [None] * len(truths)
+
         async with self.db.connection() as conn:
-            for truth in truths:
+            for truth, embedding_blob in zip(truths, embeddings):
                 truth_id = str(uuid.uuid4())
 
                 await conn.execute("""
                     INSERT INTO truths (
                         truth_id, doc_id, statement, source_section,
                         source_page, source_paragraph, statement_type,
-                        confidence, source_authority
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        confidence, source_authority, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     truth_id,
                     doc_id,
@@ -47,7 +73,8 @@ class ExtractionStorage:
                     truth.paragraph,
                     truth.statement_type.value,
                     truth.confidence,
-                    source_authority.value
+                    source_authority.value,
+                    embedding_blob
                 ))
 
                 # Store truth-entity relationships

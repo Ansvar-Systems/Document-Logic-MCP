@@ -108,8 +108,19 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         await conn.commit()
 
     # Create extraction objects
+    from .embeddings import EmbeddingService
+
     extractor = DocumentExtractor()
-    storage = ExtractionStorage(db)
+
+    # Initialize embedding service for semantic search
+    try:
+        embedding_service = EmbeddingService()
+        logger.info("Embedding service initialized for extraction")
+    except ImportError:
+        logger.warning("sentence-transformers not available. Embeddings disabled.")
+        embedding_service = None
+
+    storage = ExtractionStorage(db, embedding_service=embedding_service)
 
     # Reconstruct ParseResult (simplified - in real impl, store sections in DB)
     parse_result = ParseResult(

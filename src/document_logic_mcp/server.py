@@ -6,6 +6,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from .tools import parse_document_tool, extract_document_tool
+from .database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -117,15 +118,34 @@ def create_server() -> Server:
 
         elif name == "query_documents":
             from .query import QueryEngine
+            from .embeddings import EmbeddingService
+
             db = Database(DEFAULT_DB_PATH)
-            query_engine = QueryEngine(db)
+
+            # Try to use embeddings for semantic search
+            try:
+                embedding_service = EmbeddingService()
+                logger.info("Using semantic search with embeddings")
+            except ImportError:
+                logger.warning("sentence-transformers not available. Using keyword search.")
+                embedding_service = None
+
+            query_engine = QueryEngine(db, embedding_service=embedding_service)
             results = await query_engine.query(arguments["query"])
             return [TextContent(type="text", text=str(results))]
 
         elif name == "get_entity_aliases":
             from .query import QueryEngine
+            from .embeddings import EmbeddingService
+
             db = Database(DEFAULT_DB_PATH)
-            query_engine = QueryEngine(db)
+
+            try:
+                embedding_service = EmbeddingService()
+            except ImportError:
+                embedding_service = None
+
+            query_engine = QueryEngine(db, embedding_service=embedding_service)
             result = await query_engine.get_entity_aliases(arguments["entity_name"])
             return [TextContent(type="text", text=str(result))]
 
