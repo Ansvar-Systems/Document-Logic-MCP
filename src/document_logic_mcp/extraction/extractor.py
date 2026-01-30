@@ -73,6 +73,22 @@ class DocumentExtractor:
             LLM response text
         """
         if self.gateway_url:
+            # Parse extraction_model if it contains provider prefix (e.g., "ollama/llama3.1")
+            model = self.extraction_model
+            provider = None
+            if "/" in self.extraction_model:
+                provider, model = self.extraction_model.split("/", 1)
+                logger.info(f"Parsed model format: provider='{provider}', model='{model}'")
+
+            # Build payload
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens
+            }
+            if provider:
+                payload["provider"] = provider
+
             # Gateway mode - call LLM Gateway with service API key
             async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
@@ -81,11 +97,7 @@ class DocumentExtractor:
                         "X-Service-API-Key": self.gateway_token,
                         "Content-Type": "application/json"
                     },
-                    json={
-                        "model": self.extraction_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": max_tokens
-                    }
+                    json=payload
                 )
                 response.raise_for_status()
                 data = response.json()
