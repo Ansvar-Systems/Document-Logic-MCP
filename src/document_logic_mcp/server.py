@@ -49,6 +49,34 @@ def create_server() -> Server:
                     "required": ["doc_id"]
                 }
             ),
+            Tool(
+                name="query_documents",
+                description="Query documents with natural language. Returns truths with full citations and metadata. Broad matching - returns comprehensive results.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural language query (e.g., 'What encryption methods are used?')"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            ),
+            Tool(
+                name="get_entity_aliases",
+                description="Get potential aliases and related entities for a given entity name.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entity_name": {
+                            "type": "string",
+                            "description": "Entity name to find aliases for"
+                        }
+                    },
+                    "required": ["entity_name"]
+                }
+            ),
         ]
 
     @server.call_tool()
@@ -66,6 +94,20 @@ def create_server() -> Server:
                 doc_id=arguments["doc_id"],
                 db_path=DEFAULT_DB_PATH
             )
+            return [TextContent(type="text", text=str(result))]
+
+        elif name == "query_documents":
+            from .query import QueryEngine
+            db = Database(DEFAULT_DB_PATH)
+            query_engine = QueryEngine(db)
+            results = await query_engine.query(arguments["query"])
+            return [TextContent(type="text", text=str(results))]
+
+        elif name == "get_entity_aliases":
+            from .query import QueryEngine
+            db = Database(DEFAULT_DB_PATH)
+            query_engine = QueryEngine(db)
+            result = await query_engine.get_entity_aliases(arguments["entity_name"])
             return [TextContent(type="text", text=str(result))]
 
         else:
