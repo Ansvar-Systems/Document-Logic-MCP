@@ -20,5 +20,8 @@ RUN pip install -e ".[dev]"
 # Create data directory
 RUN mkdir -p /app/data
 
-# Run MCP server
-CMD ["python", "-m", "document_logic_mcp.server"]
+# Expose port
+EXPOSE 3000
+
+# Run HTTP server
+CMD ["python", "-m", "document_logic_mcp.http_server"]

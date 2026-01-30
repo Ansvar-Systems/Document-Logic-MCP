@@ -29,20 +29,96 @@ Built for accuracy-critical security workflows: threat modeling, third-party ris
 
 ## Installation
 
+### Docker (Recommended)
+
+```bash
+# Build the image
+docker build -t document-logic-mcp .
+
+# Run with LLM Gateway (recommended - supports Ollama, Anthropic, OpenAI, etc.)
+docker run -d \
+  -p 3000:3000 \
+  -e LLM_GATEWAY_URL=http://llm-gateway:8001 \
+  -e EXTRACTION_MODEL=llama3.1 \
+  -v $(pwd)/data:/app/data \
+  document-logic-mcp
+
+# OR run with direct Anthropic API (legacy)
+docker run -d \
+  -p 3000:3000 \
+  -e ANTHROPIC_API_KEY=your_key_here \
+  -v $(pwd)/data:/app/data \
+  document-logic-mcp
+```
+
+### Local Development
+
 ```bash
 pip install -e ".[dev]"
+
+# Set environment variables
+export LLM_GATEWAY_URL=http://localhost:8001
+export EXTRACTION_MODEL=llama3.1
+
+# Run HTTP server
+python -m document_logic_mcp.http_server
 ```
 
-Or use Docker:
+## Configuration
 
-```bash
-docker build -t document-logic-mcp .
-docker run -v $(pwd)/data:/app/data document-logic-mcp
-```
+### Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `PORT` | HTTP server port | `3000` | No |
+| `DB_PATH` | SQLite database path | `data/assessment.db` | No |
+| **LLM Configuration (Gateway Mode - Recommended)** |
+| `LLM_GATEWAY_URL` | LLM Gateway base URL | - | Yes (gateway mode) |
+| `LLM_GATEWAY_API_KEY` | Gateway API key | `dev` | No |
+| `EXTRACTION_MODEL` | Model for extraction | `claude-sonnet-4-20250514` | No |
+| **LLM Configuration (Direct API Mode - Legacy)** |
+| `ANTHROPIC_API_KEY` | Anthropic API key | - | Yes (direct mode) |
+
+### LLM Backend Modes
+
+**Gateway Mode (Recommended)** - Uses an LLM Gateway that supports:
+- **Ollama** (local models: `llama3.1`, `qwen2.5-coder`, etc.)
+- Anthropic (Claude)
+- OpenAI (GPT-4)
+- Azure AI Foundry
+- Google Gemini
+
+**Direct API Mode (Legacy)** - Calls Anthropic API directly. Only supports Claude models.
 
 ## Usage
 
-### MCP Tools
+### HTTP API (Content-Based)
+
+The HTTP server provides REST endpoints that accept file content directly (no filesystem access needed).
+
+**POST /parse-content** - Parse document structure (fast, deterministic)
+```bash
+curl -X POST http://localhost:3000/parse-content \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename": "document.docx",
+    "content": "base64_encoded_file_content"
+  }'
+```
+
+**POST /extract** - Extract truths/entities/relationships (LLM-based, slow)
+```bash
+curl -X POST http://localhost:3000/extract \
+  -H "Content-Type: application/json" \
+  -d '{"doc_id": "uuid_from_parse"}'
+```
+
+**GET /health** - Health check
+```bash
+curl http://localhost:3000/health
+```
+
+### MCP Tools (Legacy STDIO Mode)
 
 **parse_document** - Fast parsing (seconds)
 ```json
@@ -112,6 +188,58 @@ await export_assessment(format="json", output_path="./deliverable.json")
 **SQLite** - Full database, technical teams can query
 **Markdown** - Human-readable report, executives
 
+## Integration with Ansvar Platform
+
+Document-Logic MCP integrates with the Ansvar TPRM workflow platform to provide structured document intelligence for vendor risk assessments.
+
+### Architecture
+
+```
+Ansvar TPRM Workflow
+    ↓
+Document Classifier Step (use_document_logic_mcp: true)
+    ↓
+Workflow Input Builder
+    ↓
+Document-Logic MCP HTTP API
+    ├─ Parse: Extract sections (< 1s)
+    └─ Extract: LLM-based extraction (1-3 min)
+    ↓
+Structured JSON → TPRM Agent
+    ↓
+Risk Analysis with Citations
+```
+
+### Configuration in Ansvar
+
+**docker-compose.mcp.yml:**
+```yaml
+document-logic-mcp:
+  image: document-logic-mcp:latest
+  environment:
+    LLM_GATEWAY_URL: "http://llm-gateway-fastapi:8001"
+    EXTRACTION_MODEL: "llama3.1"  # Use local Ollama
+  networks:
+    - ansvar-network
+```
+
+**Workflow Step (TPRM Document Classifier):**
+```json
+{
+  "parameters": {
+    "use_original_document": true,
+    "use_document_logic_mcp": true
+  }
+}
+```
+
+### Benefits for TPRM
+
+1. **Structured Data** - Agents receive truths/entities, not raw text
+2. **Citation Tracking** - Every fact has page/section reference
+3. **Local Processing** - Use Ollama (no API costs, data privacy)
+4. **Audit Trail** - Extraction results stored with workflow run
+
 ## Development
 
 ```bash
@@ -128,6 +256,17 @@ pytest --cov=src/document_logic_mcp
 black src/ tests/
 ruff check src/ tests/
 ```
+
+## Troubleshooting
+
+### "Authentication method not resolved"
+Set either `LLM_GATEWAY_URL` + `EXTRACTION_MODEL` or `ANTHROPIC_API_KEY`.
+
+### "Unsupported file type"
+Only `.pdf` and `.docx` files are supported. Ensure correct extension.
+
+### Extract takes too long
+Use local Ollama models for faster extraction (no rate limits, network latency).
 
 ## License
 
