@@ -76,6 +76,10 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     Slow (minutes), LLM-based hierarchical extraction.
     Blocks until complete - honest about wait time.
     """
+    from .parsers.base import ParseResult, Section
+    from .storage import ExtractionStorage
+    from .extraction import SourceAuthority
+
     db = Database(db_path)
 
     # Get parsed document
@@ -103,9 +107,38 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         )
         await conn.commit()
 
-    # TODO: Implement full extraction pipeline
-    # For now, just update status to completed
+    # Create extraction objects
+    extractor = DocumentExtractor()
+    storage = ExtractionStorage(db)
 
+    # Reconstruct ParseResult (simplified - in real impl, store sections in DB)
+    parse_result = ParseResult(
+        filename=filename,
+        sections=[Section(title="Document", content=raw_text)],
+        raw_text=raw_text,
+        page_count=1,
+        metadata={}
+    )
+
+    # Pass 1: Extract overview
+    logger.info("Pass 1: Extracting document overview...")
+    overview = await extractor.extract_overview(parse_result)
+    await storage.store_entities(doc_id, overview.entities)
+
+    # Pass 2: Extract sections (simplified - extract from full text for now)
+    logger.info("Pass 2: Extracting truths and relationships...")
+    section_extraction = await extractor.extract_section(
+        section_title="Document",
+        section_content=raw_text,
+        doc_context=overview,
+        filename=filename,
+        page=1
+    )
+
+    await storage.store_truths(doc_id, section_extraction.truths)
+    await storage.store_relationships(doc_id, section_extraction.relationships)
+
+    # Update status
     async with db.connection() as conn:
         await conn.execute(
             "UPDATE documents SET status = ? WHERE doc_id = ?",
@@ -118,7 +151,7 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     return {
         "doc_id": doc_id,
         "status": "completed",
-        "truths_extracted": 0,  # TODO: Actual count
-        "entities_found": 0,  # TODO: Actual count
-        "relationships_found": 0  # TODO: Actual count
+        "truths_extracted": len(section_extraction.truths),
+        "entities_found": len(overview.entities) + len(section_extraction.entities),
+        "relationships_found": len(section_extraction.relationships)
     }
