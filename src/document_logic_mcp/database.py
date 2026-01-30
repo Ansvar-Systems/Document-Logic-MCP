@@ -29,7 +29,8 @@ class Database:
                     document_date TEXT,
                     upload_date TEXT NOT NULL,
                     sections_count INTEGER NOT NULL,
-                    status TEXT NOT NULL
+                    status TEXT NOT NULL,
+                    raw_text TEXT
                 )
             """)
 
@@ -41,9 +42,12 @@ class Database:
                     statement TEXT NOT NULL,
                     source_section TEXT NOT NULL,
                     source_page INTEGER,
+                    source_paragraph INTEGER,
+                    document_date TEXT,
                     statement_type TEXT NOT NULL,
                     confidence REAL NOT NULL,
                     source_authority TEXT NOT NULL,
+                    embedding BLOB,
                     FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
                 )
             """)
@@ -56,7 +60,7 @@ class Database:
                     doc_id TEXT NOT NULL,
                     first_mention_section TEXT NOT NULL,
                     first_mention_page INTEGER,
-                    entity_type TEXT NOT NULL,
+                    entity_type TEXT,
                     mention_count INTEGER NOT NULL,
                     FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
                 )
@@ -91,12 +95,13 @@ class Database:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS relationships (
                     relationship_id TEXT PRIMARY KEY,
+                    source_doc_id TEXT NOT NULL,
                     entity_a_id TEXT NOT NULL,
                     relationship_type TEXT NOT NULL,
                     entity_b_id TEXT NOT NULL,
                     source_section TEXT NOT NULL,
-                    source_page INTEGER,
                     confidence REAL NOT NULL,
+                    FOREIGN KEY (source_doc_id) REFERENCES documents(doc_id),
                     FOREIGN KEY (entity_a_id) REFERENCES entities(entity_id),
                     FOREIGN KEY (entity_b_id) REFERENCES entities(entity_id)
                 )

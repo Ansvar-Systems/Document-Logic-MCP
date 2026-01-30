@@ -26,6 +26,8 @@ class Truth:
     statement: str
     source_section: str
     source_page: Optional[int]
+    source_paragraph: Optional[int]
+    document_date: Optional[str]
     statement_type: str  # "fact", "opinion", "definition", "instruction"
     confidence: float  # 0.0 to 1.0
     source_authority: str  # "primary", "secondary", "tertiary"
@@ -41,7 +43,7 @@ class Entity:
     doc_id: str
     first_mention_section: str
     first_mention_page: Optional[int]
-    entity_type: str  # "person", "organization", "location", "date", "other"
+    entity_type: Optional[str]  # "person", "organization", "location", "date", "other"
     mention_count: int
 
 
@@ -61,9 +63,9 @@ class Relationship:
     """A relationship between two entities."""
 
     relationship_id: str
+    source_doc_id: str
     entity_a_id: str
     relationship_type: str
     entity_b_id: str
     source_section: str
-    source_page: Optional[int]
     confidence: float  # 0.0 to 1.0
