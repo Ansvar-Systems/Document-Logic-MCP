@@ -36,15 +36,24 @@ class DocumentExtractor:
     - Direct mode: Uses Anthropic API directly (set ANTHROPIC_API_KEY)
     """
 
-    def __init__(self, llm_client: Optional[Anthropic] = None):
+    def __init__(
+        self,
+        llm_client: Optional[Anthropic] = None,
+        extraction_model_override: Optional[str] = None
+    ):
         """Initialize extractor with LLM client or gateway.
 
         Args:
             llm_client: Optional Anthropic client (for direct mode only)
+            extraction_model_override: Optional model override (takes precedence over env var)
         """
         self.gateway_url = os.getenv("LLM_GATEWAY_URL")
         self.gateway_token = os.getenv("LLM_GATEWAY_API_KEY", "dev")
-        self.extraction_model = os.getenv("EXTRACTION_MODEL", "claude-sonnet-4-20250514")
+        # Use override if provided, otherwise fall back to env var
+        self.extraction_model = (
+            extraction_model_override
+            or os.getenv("EXTRACTION_MODEL", "claude-sonnet-4-20250514")
+        )
 
         if self.gateway_url:
             logger.info(f"Using LLM Gateway mode: {self.gateway_url}, model: {self.extraction_model}")

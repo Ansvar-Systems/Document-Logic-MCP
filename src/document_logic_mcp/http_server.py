@@ -40,6 +40,7 @@ class ParseContentRequest(BaseModel):
 
 class ExtractDocumentRequest(BaseModel):
     doc_id: str = Field(..., description="Document ID from parse_document")
+    model: str | None = Field(None, description="Optional LLM model override (e.g., 'ollama/llama3.1')")
 
 
 class QueryDocumentsRequest(BaseModel):
@@ -115,7 +116,8 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     try:
         result = await extract_document_tool(
             doc_id=request.doc_id,
-            db_path=db_path
+            db_path=db_path,
+            extraction_model=request.model
         )
         return result
     except Exception as e:

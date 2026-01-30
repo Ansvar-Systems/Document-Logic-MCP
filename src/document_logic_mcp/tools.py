@@ -85,12 +85,21 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
     }
 
 
-async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
+async def extract_document_tool(
+    doc_id: str,
+    db_path: Path,
+    extraction_model: str | None = None
+) -> Dict[str, Any]:
     """
     Extract truths, entities, and relationships from parsed document.
 
     Slow (minutes), LLM-based hierarchical extraction.
     Blocks until complete - honest about wait time.
+
+    Args:
+        doc_id: Document ID from parse operation
+        db_path: Path to SQLite database
+        extraction_model: Optional model override (e.g., 'ollama/llama3.1')
     """
     from .parsers.base import ParseResult, Section
     from .storage import ExtractionStorage
@@ -134,7 +143,7 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     # Create extraction objects
     from .embeddings import EmbeddingService
 
-    extractor = DocumentExtractor()
+    extractor = DocumentExtractor(extraction_model_override=extraction_model)
 
     # Initialize embedding service for semantic search
     try:
