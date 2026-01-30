@@ -34,6 +34,18 @@ class Database:
                 )
             """)
 
+            # Sections table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS sections (
+                    section_id TEXT PRIMARY KEY,
+                    doc_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    section_index INTEGER NOT NULL,
+                    FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+                )
+            """)
+
             # Truths table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS truths (
@@ -116,6 +128,9 @@ class Database:
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(entity_name)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sections_doc_id ON sections(doc_id)"
             )
 
             await db.commit()

@@ -44,6 +44,7 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
     doc_id = str(uuid.uuid4())
 
     async with db.connection() as conn:
+        # Store document metadata
         await conn.execute("""
             INSERT INTO documents (doc_id, filename, upload_date, sections_count, status, raw_text)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -55,6 +56,21 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
             "parsed",
             parse_result.raw_text
         ))
+
+        # Store sections
+        for idx, section in enumerate(parse_result.sections):
+            section_id = str(uuid.uuid4())
+            await conn.execute("""
+                INSERT INTO sections (section_id, doc_id, title, content, section_index)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                section_id,
+                doc_id,
+                section.title,
+                section.content,
+                idx
+            ))
+
         await conn.commit()
 
     logger.info(f"Parsed {file_path.name}: {len(parse_result.sections)} sections")
@@ -97,6 +113,14 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         raw_text = row["raw_text"]
         sections_count = row["sections_count"]
 
+        # Retrieve sections
+        cursor = await conn.execute(
+            "SELECT title, content FROM sections WHERE doc_id = ? ORDER BY section_index",
+            (doc_id,)
+        )
+        section_rows = await cursor.fetchall()
+        sections = [Section(title=row["title"], content=row["content"]) for row in section_rows]
+
     logger.info(f"Starting extraction for {filename}...")
 
     # Update status
@@ -122,10 +146,10 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
 
     storage = ExtractionStorage(db, embedding_service=embedding_service)
 
-    # Reconstruct ParseResult (simplified - in real impl, store sections in DB)
+    # Reconstruct ParseResult with actual sections
     parse_result = ParseResult(
         filename=filename,
-        sections=[Section(title="Document", content=raw_text)],
+        sections=sections,
         raw_text=raw_text,
         page_count=1,
         metadata={}
@@ -136,18 +160,30 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     overview = await extractor.extract_overview(parse_result)
     await storage.store_entities(doc_id, overview.entities)
 
-    # Pass 2: Extract sections (simplified - extract from full text for now)
-    logger.info("Pass 2: Extracting truths and relationships...")
-    section_extraction = await extractor.extract_section(
-        section_title="Document",
-        section_content=raw_text,
-        doc_context=overview,
-        filename=filename,
-        page=1
-    )
+    # Pass 2: Extract from each section
+    logger.info(f"Pass 2: Extracting truths from {len(sections)} sections...")
+    all_truths = []
+    all_entities = []
+    all_relationships = []
 
-    await storage.store_truths(doc_id, section_extraction.truths)
-    await storage.store_relationships(doc_id, section_extraction.relationships)
+    for idx, section in enumerate(sections):
+        logger.info(f"  Extracting section {idx + 1}/{len(sections)}: {section.title}...")
+        section_extraction = await extractor.extract_section(
+            section_title=section.title,
+            section_content=section.content,
+            doc_context=overview,
+            filename=filename,
+            page=None
+        )
+
+        all_truths.extend(section_extraction.truths)
+        all_entities.extend(section_extraction.entities)
+        all_relationships.extend(section_extraction.relationships)
+
+    # Store all extracted data
+    await storage.store_truths(doc_id, all_truths)
+    await storage.store_entities(doc_id, all_entities)
+    await storage.store_relationships(doc_id, all_relationships)
 
     # Update status
     async with db.connection() as conn:
@@ -157,12 +193,12 @@ async def extract_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         )
         await conn.commit()
 
-    logger.info(f"Extraction complete for {filename}")
+    logger.info(f"Extraction complete for {filename}: {len(all_truths)} truths, {len(all_entities)} entities, {len(all_relationships)} relationships")
 
     return {
         "doc_id": doc_id,
         "status": "completed",
-        "truths_extracted": len(section_extraction.truths),
-        "entities_found": len(overview.entities) + len(section_extraction.entities),
-        "relationships_found": len(section_extraction.relationships)
+        "truths_extracted": len(all_truths),
+        "entities_found": len(overview.entities) + len(all_entities),
+        "relationships_found": len(all_relationships)
     }
