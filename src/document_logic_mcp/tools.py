@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
 from .database import Database
-from .parsers import PDFParser, DOCXParser
+from .parsers import PDFParser, DOCXParser, JSONParser
 from .extraction import DocumentExtractor
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,8 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
         parser = PDFParser()
     elif suffix in [".docx", ".doc"]:
         parser = DOCXParser()
+    elif suffix == ".json":
+        parser = JSONParser()
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
