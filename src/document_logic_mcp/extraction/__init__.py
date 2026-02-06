@@ -7,6 +7,11 @@ from .schemas import (
     ExtractedEntity,
     ExtractedTruth,
     ExtractedRelationship,
+    ExtractionSynthesis,
+    ComponentEntry,
+    TrustBoundaryCrossing,
+    ImplicitNegative,
+    AmbiguityFlag,
     StatementType,
     SourceAuthority,
 )
@@ -18,6 +23,11 @@ __all__ = [
     "ExtractedEntity",
     "ExtractedTruth",
     "ExtractedRelationship",
+    "ExtractionSynthesis",
+    "ComponentEntry",
+    "TrustBoundaryCrossing",
+    "ImplicitNegative",
+    "AmbiguityFlag",
     "StatementType",
     "SourceAuthority",
 ]

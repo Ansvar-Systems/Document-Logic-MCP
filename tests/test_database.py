@@ -28,6 +28,7 @@ async def test_database_initialization(tmp_path: Path) -> None:
         "entities",
         "entity_aliases",
         "relationships",
+        "sections",
         "truth_entities",
         "truths",
     ]

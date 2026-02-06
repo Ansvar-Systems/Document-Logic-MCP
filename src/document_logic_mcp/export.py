@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -153,7 +154,7 @@ class AssessmentExporter:
 
             # Metadata
             data["extraction_metadata"] = {
-                "model_used": "claude-sonnet-4-20250514",
+                "model_used": os.getenv("EXTRACTION_MODEL", "claude-sonnet-4-20250514"),
                 "extraction_date": datetime.now().isoformat(),
                 "documents_processed": len(data["documents"]),
                 "truths_extracted": len(data["truths"]),

@@ -3,29 +3,45 @@
 Provides HTTP endpoints for document processing tools to integrate with Ansvar platform.
 """
 
-import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .tools import parse_document_tool, extract_document_tool
+from .database import Database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global database path
+db_path: Optional[Path] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database on startup."""
+    global db_path
+    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db = Database(db_path)
+    await db.initialize()
+    logger.info(f"Database initialized at {db_path}")
+
+    yield
+
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Document-Logic MCP",
     description="Structured document intelligence extraction with citations",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
-
-# Global database path
-db_path: Path = None
 
 
 # Request models
@@ -41,6 +57,16 @@ class ParseContentRequest(BaseModel):
 class ExtractDocumentRequest(BaseModel):
     doc_id: str = Field(..., description="Document ID from parse_document")
     model: str | None = Field(None, description="Optional LLM model override (e.g., 'ollama/llama3.1')")
+    analysis_context: str | None = Field(
+        None,
+        description=(
+            "Optional domain context for enhanced extraction. "
+            "Activates domain-specific prompt supplements (Pass 2) and "
+            "cross-section synthesis (Pass 3: component registry, trust boundaries, "
+            "implicit negatives, ambiguity flags). "
+            "Available: 'stride_threat_modeling', 'tprm_vendor_assessment'"
+        )
+    )
 
 
 class QueryDocumentsRequest(BaseModel):
@@ -112,12 +138,18 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
 # Extract document endpoint
 @app.post("/extract")
 async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
-    """Extract truths, entities, and relationships from parsed document."""
+    """Extract truths, entities, and relationships from parsed document.
+
+    When analysis_context is provided, also runs a synthesis pass (Pass 3)
+    that produces component registry, trust boundaries, implicit negatives,
+    and ambiguity flags. The synthesis output is returned under the "synthesis" key.
+    """
     try:
         result = await extract_document_tool(
             doc_id=request.doc_id,
             db_path=db_path,
-            extraction_model=request.model
+            extraction_model=request.model,
+            analysis_context=request.analysis_context,
         )
         return result
     except Exception as e:
@@ -125,13 +157,27 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize database path on startup."""
-    global db_path
-    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Database path: {db_path}")
+# Query documents endpoint
+@app.post("/query-documents")
+async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
+    """Query extracted truths with natural language. Returns verified facts with citations."""
+    try:
+        from .query import QueryEngine
+        from .embeddings import EmbeddingService
+
+        db = Database(db_path)
+
+        try:
+            embedding_service = EmbeddingService()
+        except ImportError:
+            embedding_service = None
+
+        query_engine = QueryEngine(db, embedding_service=embedding_service)
+        results = await query_engine.query(request.query)
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"Query failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

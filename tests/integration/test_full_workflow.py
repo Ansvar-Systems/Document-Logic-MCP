@@ -1,5 +1,6 @@
 """Integration test for full document processing workflow."""
 
+import json
 import pytest
 from pathlib import Path
 from document_logic_mcp.tools import parse_document_tool, extract_document_tool
@@ -14,15 +15,15 @@ async def test_full_document_workflow(tmp_path):
     """Test complete workflow: parse → extract → query → export."""
     db_path = tmp_path / "test.db"
 
-    # Create test document
-    test_doc = tmp_path / "test_architecture.txt"
-    test_doc.write_text("""
-    SYSTEM ARCHITECTURE
-
-    The system uses AES-256 encryption for all data at rest.
-    Customer data is stored in the PostgreSQL database.
-    Authentication is handled via OAuth 2.0.
-    """)
+    # Create test document as JSON (one of the supported formats)
+    test_doc = tmp_path / "test_architecture.json"
+    test_doc.write_text(json.dumps({
+        "system_architecture": (
+            "The system uses AES-256 encryption for all data at rest. "
+            "Customer data is stored in the PostgreSQL database."
+        ),
+        "authentication": "Authentication is handled via OAuth 2.0.",
+    }))
 
     # Step 1: Parse document
     parse_result = await parse_document_tool(

@@ -25,6 +25,9 @@ dev = [
     "mypy>=1.8.0",
 ]
 
+[project.scripts]
+document-logic-mcp = "document_logic_mcp.__main__:main"
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
@@ -35,6 +38,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (may require external services)",
+]
 
 [tool.black]
 line-length = 100
