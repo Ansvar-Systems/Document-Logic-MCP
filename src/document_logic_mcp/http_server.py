@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .tools import parse_document_tool, extract_document_tool
+from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool
 from .database import Database
 
 logging.basicConfig(level=logging.INFO)
@@ -74,9 +74,13 @@ class QueryDocumentsRequest(BaseModel):
     doc_ids: list[str] | None = Field(None, description="Optional: limit to specific documents")
 
 
+class EntityAliasesRequest(BaseModel):
+    entity_name: str = Field(..., description="Exact entity name to look up")
+
+
 class ExportAssessmentRequest(BaseModel):
     format: str = Field("json", description="Export format: json, sqlite, or markdown")
-    output_path: str | None = Field(None, description="Optional output path")
+    output_path: str = Field(..., description="Absolute path to save the export file")
 
 
 # Health check
@@ -157,6 +161,32 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# List documents endpoint
+@app.get("/documents")
+async def list_documents() -> Dict[str, Any]:
+    """List all documents with extraction status and counts."""
+    try:
+        result = await list_documents_tool(db_path=db_path)
+        return result
+    except Exception as e:
+        logger.error(f"List documents failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Get document endpoint
+@app.get("/documents/{doc_id}")
+async def get_document(doc_id: str) -> Dict[str, Any]:
+    """Get full document details including all extracted data."""
+    try:
+        result = await get_document_tool(doc_id=doc_id, db_path=db_path)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Get document failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Query documents endpoint
 @app.post("/query-documents")
 async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
@@ -166,6 +196,7 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
         from .embeddings import EmbeddingService
 
         db = Database(db_path)
+        await db.initialize()
 
         try:
             embedding_service = EmbeddingService()
@@ -173,10 +204,65 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
             embedding_service = None
 
         query_engine = QueryEngine(db, embedding_service=embedding_service)
-        results = await query_engine.query(request.query)
+        results = await query_engine.query(request.query, doc_ids=request.doc_ids)
         return {"results": results, "count": len(results)}
     except Exception as e:
         logger.error(f"Query failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Entity aliases endpoint
+@app.post("/entity-aliases")
+async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
+    """Find potential aliases for a named entity."""
+    try:
+        from .query import QueryEngine
+        from .embeddings import EmbeddingService
+
+        db = Database(db_path)
+        await db.initialize()
+
+        try:
+            embedding_service = EmbeddingService()
+        except ImportError:
+            embedding_service = None
+
+        query_engine = QueryEngine(db, embedding_service=embedding_service)
+        result = await query_engine.get_entity_aliases(request.entity_name)
+        return result
+    except Exception as e:
+        logger.error(f"Entity aliases failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Export assessment endpoint
+@app.post("/export")
+async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
+    """Export all extracted data as a deliverable file."""
+    try:
+        from .export import AssessmentExporter
+
+        db = Database(db_path)
+        await db.initialize()
+        exporter = AssessmentExporter(db)
+
+        format_type = request.format
+        output_path = Path(request.output_path)
+
+        if format_type == "json":
+            result_path = await exporter.export_json(output_path)
+        elif format_type == "sqlite":
+            result_path = await exporter.export_sqlite(output_path)
+        elif format_type == "markdown":
+            result_path = await exporter.export_markdown(output_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown format: {format_type}")
+
+        return {"exported_to": str(result_path), "format": format_type}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

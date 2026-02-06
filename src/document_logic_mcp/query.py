@@ -27,7 +27,8 @@ class QueryEngine:
         self,
         natural_language_query: str,
         top_k: int = 20,
-        similarity_threshold: float = 0.3
+        similarity_threshold: float = 0.3,
+        doc_ids: List[str] | None = None,
     ) -> List[Dict[str, Any]]:
         """
         Query documents with natural language.
@@ -39,6 +40,7 @@ class QueryEngine:
             natural_language_query: Natural language query string
             top_k: Maximum number of results to return
             similarity_threshold: Minimum similarity score (0.0-1.0) for semantic search
+            doc_ids: Optional list of document IDs to scope the search to
 
         Returns:
             List of truths with metadata, sorted by relevance
@@ -47,19 +49,20 @@ class QueryEngine:
         if self.embedding_service:
             try:
                 return await self._semantic_search(
-                    natural_language_query, top_k, similarity_threshold
+                    natural_language_query, top_k, similarity_threshold, doc_ids=doc_ids
                 )
             except Exception as e:
                 logger.warning(f"Semantic search failed: {e}. Falling back to keyword search.")
 
         # Fallback to keyword search
-        return await self._keyword_search(natural_language_query)
+        return await self._keyword_search(natural_language_query, doc_ids=doc_ids)
 
     async def _semantic_search(
         self,
         query: str,
         top_k: int,
-        similarity_threshold: float
+        similarity_threshold: float,
+        doc_ids: List[str] | None = None,
     ) -> List[Dict[str, Any]]:
         """Semantic search using embeddings."""
         # Embed query
@@ -68,8 +71,8 @@ class QueryEngine:
         results = []
 
         async with self.db.connection() as conn:
-            # Fetch all truths with embeddings
-            cursor = await conn.execute("""
+            # Fetch truths with embeddings, optionally filtered by doc_ids
+            sql = """
                 SELECT
                     t.truth_id,
                     t.statement,
@@ -85,7 +88,14 @@ class QueryEngine:
                 FROM truths t
                 JOIN documents d ON t.doc_id = d.doc_id
                 WHERE t.embedding IS NOT NULL
-            """)
+            """
+            params = []
+            if doc_ids:
+                placeholders = ",".join("?" for _ in doc_ids)
+                sql += f" AND t.doc_id IN ({placeholders})"
+                params.extend(doc_ids)
+
+            cursor = await conn.execute(sql, params)
 
             rows = await cursor.fetchall()
 
@@ -146,7 +156,9 @@ class QueryEngine:
 
         return results
 
-    async def _keyword_search(self, query: str) -> List[Dict[str, Any]]:
+    async def _keyword_search(
+        self, query: str, doc_ids: List[str] | None = None,
+    ) -> List[Dict[str, Any]]:
         """Fallback keyword-based search."""
         keywords = query.lower().split()
         results = []
@@ -154,7 +166,7 @@ class QueryEngine:
         async with self.db.connection() as conn:
             # Search truths by keywords
             for keyword in keywords:
-                cursor = await conn.execute("""
+                sql = """
                     SELECT
                         t.truth_id,
                         t.statement,
@@ -169,8 +181,15 @@ class QueryEngine:
                     FROM truths t
                     JOIN documents d ON t.doc_id = d.doc_id
                     WHERE LOWER(t.statement) LIKE ?
-                    ORDER BY t.confidence DESC
-                """, (f"%{keyword}%",))
+                """
+                params: list = [f"%{keyword}%"]
+                if doc_ids:
+                    placeholders = ",".join("?" for _ in doc_ids)
+                    sql += f" AND t.doc_id IN ({placeholders})"
+                    params.extend(doc_ids)
+                sql += " ORDER BY t.confidence DESC"
+
+                cursor = await conn.execute(sql, params)
 
                 rows = await cursor.fetchall()
 
@@ -188,6 +207,7 @@ class QueryEngine:
                     result = {
                         "truth_id": row["truth_id"],
                         "statement": row["statement"],
+                        "similarity": None,
                         "source": {
                             "document": row["filename"],
                             "section": row["source_section"],
@@ -201,8 +221,8 @@ class QueryEngine:
                         "related_entities": entities,
                     }
 
-                    # Avoid duplicates
-                    if result not in results:
+                    # Avoid duplicates by truth_id
+                    if not any(r["truth_id"] == result["truth_id"] for r in results):
                         results.append(result)
 
         logger.info(f"Keyword search for '{query}' returned {len(results)} results")

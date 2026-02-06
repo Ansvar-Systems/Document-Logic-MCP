@@ -22,6 +22,7 @@ from typing import Dict, Any, Optional
 from .database import Database
 from .parsers import PDFParser, DOCXParser, JSONParser
 from .extraction import DocumentExtractor
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
     suffix = file_path.suffix.lower()
     if suffix == ".pdf":
         parser = PDFParser()
-    elif suffix in [".docx", ".doc"]:
+    elif suffix == ".docx":
         parser = DOCXParser()
     elif suffix == ".json":
         parser = JSONParser()
@@ -359,5 +360,126 @@ async def extract_document_tool(
     # Include synthesis output when analysis_context was provided
     if synthesis_output is not None:
         result["synthesis"] = synthesis_output
+
+    return result
+
+
+async def list_documents_tool(db_path: Path) -> Dict[str, Any]:
+    """
+    List all documents in the database with extraction status and counts.
+
+    Returns a catalog of documents for agent discovery — lets agents
+    know what's been parsed/extracted without fetching full data.
+    """
+    db = Database(db_path)
+    await db.initialize()
+
+    async with db.connection() as conn:
+        cursor = await conn.execute("""
+            SELECT d.doc_id, d.filename, d.status, d.upload_date, d.sections_count,
+                   COUNT(DISTINCT t.truth_id) as truths_count,
+                   COUNT(DISTINCT e.entity_id) as entities_count,
+                   COUNT(DISTINCT r.relationship_id) as relationships_count
+            FROM documents d
+            LEFT JOIN truths t ON d.doc_id = t.doc_id
+            LEFT JOIN entities e ON d.doc_id = e.doc_id
+            LEFT JOIN relationships r ON d.doc_id = r.source_doc_id
+            GROUP BY d.doc_id
+            ORDER BY d.upload_date DESC
+        """)
+        rows = await cursor.fetchall()
+        documents = [dict(row) for row in rows]
+
+    return {"documents": documents, "count": len(documents)}
+
+
+async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
+    """
+    Get full document details including all extracted data.
+
+    Returns metadata + truths, entities, and relationships for a single document.
+    Use to check extraction status or retrieve results for downstream processing.
+    """
+    db = Database(db_path)
+    await db.initialize()
+
+    async with db.connection() as conn:
+        # Fetch document metadata
+        cursor = await conn.execute(
+            "SELECT doc_id, filename, status, upload_date, sections_count FROM documents WHERE doc_id = ?",
+            (doc_id,)
+        )
+        doc_row = await cursor.fetchone()
+
+        if not doc_row:
+            raise ValueError(f"Document {doc_id} not found")
+
+        result = dict(doc_row)
+
+        # Fetch truths with related entities
+        cursor = await conn.execute("""
+            SELECT
+                t.truth_id, t.statement, t.source_section,
+                t.source_page, t.source_paragraph, t.statement_type,
+                t.confidence, t.source_authority
+            FROM truths t
+            WHERE t.doc_id = ?
+        """, (doc_id,))
+        truth_rows = await cursor.fetchall()
+
+        truths = []
+        for row in truth_rows:
+            entity_cursor = await conn.execute("""
+                SELECT e.entity_name
+                FROM truth_entities te
+                JOIN entities e ON te.entity_id = e.entity_id
+                WHERE te.truth_id = ?
+            """, (row["truth_id"],))
+            entities = [e["entity_name"] for e in await entity_cursor.fetchall()]
+
+            truths.append({
+                "truth_id": row["truth_id"],
+                "statement": row["statement"],
+                "source_section": row["source_section"],
+                "source_page": row["source_page"],
+                "source_paragraph": row["source_paragraph"],
+                "statement_type": row["statement_type"],
+                "confidence": row["confidence"],
+                "source_authority": row["source_authority"],
+                "related_entities": entities,
+            })
+
+        # Fetch entities
+        cursor = await conn.execute("""
+            SELECT entity_id, entity_name, entity_type, mention_count
+            FROM entities
+            WHERE doc_id = ?
+        """, (doc_id,))
+        entity_rows = await cursor.fetchall()
+        entities_list = [dict(row) for row in entity_rows]
+
+        # Fetch relationships with entity name joins
+        cursor = await conn.execute("""
+            SELECT
+                r.relationship_id,
+                ea.entity_name as entity_a,
+                r.relationship_type,
+                eb.entity_name as entity_b,
+                r.source_section,
+                r.confidence
+            FROM relationships r
+            JOIN entities ea ON r.entity_a_id = ea.entity_id
+            JOIN entities eb ON r.entity_b_id = eb.entity_id
+            WHERE r.source_doc_id = ?
+        """, (doc_id,))
+        rel_rows = await cursor.fetchall()
+        relationships = [dict(row) for row in rel_rows]
+
+    result["truths_count"] = len(truths)
+    result["entities_count"] = len(entities_list)
+    result["relationships_count"] = len(relationships)
+    result["truths"] = truths
+    result["entities"] = entities_list
+    result["relationships"] = relationships
 
     return result
