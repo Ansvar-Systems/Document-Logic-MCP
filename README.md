@@ -113,6 +113,23 @@ curl -X POST http://localhost:3000/extract \
   -d '{"doc_id": "uuid_from_parse"}'
 ```
 
+**GET /documents** - List all documents with status and counts
+```bash
+curl http://localhost:3000/documents
+```
+
+**GET /documents/{doc_id}** - Get full document details with extracted data
+```bash
+curl http://localhost:3000/documents/uuid_from_parse
+```
+
+**POST /query-documents** - Query extracted truths (optionally scoped by doc_ids)
+```bash
+curl -X POST http://localhost:3000/query-documents \
+  -H "Content-Type: application/json" \
+  -d '{"query": "encryption methods", "doc_ids": ["uuid1", "uuid2"]}'
+```
+
 **GET /health** - Health check
 ```bash
 curl http://localhost:3000/health
@@ -134,10 +151,23 @@ curl http://localhost:3000/health
 }
 ```
 
-**query_documents** - Natural language query
+**list_documents** - Discover documents and check status
+```json
+{}
+```
+
+**get_document** - Get full document details with extracted data
 ```json
 {
-  "query": "What encryption methods are used?"
+  "doc_id": "uuid-from-parse-or-list"
+}
+```
+
+**query_documents** - Natural language query (optionally scoped)
+```json
+{
+  "query": "What encryption methods are used?",
+  "doc_ids": ["uuid1"]
 }
 ```
 
@@ -167,10 +197,17 @@ doc2 = await parse_document("security-policy.docx")
 await extract_document(doc1["doc_id"])
 await extract_document(doc2["doc_id"])
 
-# 3. Query
-results = await query_documents("customer data encryption")
+# 3. Discover what's available (or resume a previous session)
+docs = await list_documents()
 
-# 4. Export for client
+# 4. Check extraction results for a specific document
+detail = await get_document(doc1["doc_id"])
+
+# 5. Query across all or specific documents
+results = await query_documents("customer data encryption")
+scoped = await query_documents("encryption", doc_ids=[doc1["doc_id"]])
+
+# 6. Export for client
 await export_assessment(format="json", output_path="./deliverable.json")
 ```
 
@@ -263,7 +300,7 @@ ruff check src/ tests/
 Set either `LLM_GATEWAY_URL` + `EXTRACTION_MODEL` or `ANTHROPIC_API_KEY`.
 
 ### "Unsupported file type"
-Only `.pdf` and `.docx` files are supported. Ensure correct extension.
+Only `.pdf`, `.docx`, and `.json` files are supported. Ensure correct extension.
 
 ### Extract takes too long
 Use local Ollama models for faster extraction (no rate limits, network latency).
