@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Install system dependencies for PDF/OCR processing
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
@@ -15,13 +15,17 @@ COPY src/ /app/src/
 COPY pyproject.toml /app/
 
 # Install package with dev dependencies
-RUN pip install -e ".[dev]"
+RUN pip install --no-cache-dir -e ".[dev]"
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create non-root user and data directory
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app/data
+
+USER appuser
 
 # Expose port
 EXPOSE 3000
 
 # Run HTTP server
-CMD ["python", "-m", "document_logic_mcp.http_server"]
+CMD ["python", "-m", "document_logic_mcp", "--http"]

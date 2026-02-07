@@ -29,6 +29,7 @@ class Database:
                     document_date TEXT,
                     upload_date TEXT NOT NULL,
                     sections_count INTEGER NOT NULL,
+                    page_count INTEGER DEFAULT 1,
                     status TEXT NOT NULL,
                     raw_text TEXT
                 )
@@ -119,6 +120,14 @@ class Database:
                 )
             """)
 
+            # Migrate existing databases: add page_count if missing
+            try:
+                await db.execute(
+                    "ALTER TABLE documents ADD COLUMN page_count INTEGER DEFAULT 1"
+                )
+            except Exception:
+                pass  # Column already exists
+
             # Create indexes for common queries
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_truths_doc_id ON truths(doc_id)"
@@ -143,5 +152,6 @@ class Database:
             Database connection
         """
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
             db.row_factory = aiosqlite.Row
             yield db

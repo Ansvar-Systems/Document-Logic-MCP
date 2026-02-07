@@ -8,14 +8,28 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Depends, Request, APIRouter
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
-from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool
+from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool, delete_document_tool
 from .database import Database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- Authentication ---
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
+    """Verify API key if MCP_API_KEY is configured. Skip auth if unset (dev mode)."""
+    required_key = os.getenv("MCP_API_KEY")
+    if not required_key:
+        return  # No key configured — allow (dev mode)
+    if api_key != required_key:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+    return api_key
 
 # Global database path
 db_path: Optional[Path] = None
@@ -35,13 +49,27 @@ async def lifespan(app: FastAPI):
     yield
 
 
-# Initialize FastAPI app
+# Initialize FastAPI app — all endpoints require API key when MCP_API_KEY is set
 app = FastAPI(
     title="Document-Logic MCP",
     description="Structured document intelligence extraction with citations",
     version="0.1.0",
     lifespan=lifespan,
+    dependencies=[Depends(verify_api_key)],
 )
+
+
+# --- Unauthenticated health check (override removes app-level auth dependency) ---
+_health_router = APIRouter(dependencies=[])
+
+
+@_health_router.get("/health")
+async def health_check():
+    """Health check endpoint (no authentication required)."""
+    return {"status": "ok", "server": "document-logic-mcp"}
+
+
+app.include_router(_health_router)
 
 
 # Request models
@@ -83,13 +111,6 @@ class ExportAssessmentRequest(BaseModel):
     output_path: str = Field(..., description="Absolute path to save the export file")
 
 
-# Health check
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "server": "document-logic-mcp"}
-
-
 # Parse document endpoint
 @app.post("/parse")
 async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
@@ -100,9 +121,13 @@ async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
             db_path=db_path
         )
         return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Parse failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Document parsing failed")
 
 
 # Parse content endpoint (accepts base64-encoded content instead of file path)
@@ -115,6 +140,15 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
     try:
         # Decode base64 content
         file_content = base64.b64decode(request.content)
+
+        # File size check
+        from .tools import MAX_FILE_SIZE
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large: {len(file_content) / (1024*1024):.1f} MB "
+                       f"(max {MAX_FILE_SIZE / (1024*1024):.0f} MB)",
+            )
 
         # Write to temporary file for parsing
         with tempfile.NamedTemporaryFile(delete=False, suffix=Path(request.filename).suffix) as temp_file:
@@ -134,9 +168,11 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
             # Clean up temporary file
             Path(temp_path).unlink(missing_ok=True)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Parse content failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Content parsing failed")
 
 
 # Extract document endpoint
@@ -156,9 +192,11 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
             analysis_context=request.analysis_context,
         )
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Extract failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Document extraction failed")
 
 
 # List documents endpoint
@@ -170,7 +208,7 @@ async def list_documents() -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"List documents failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list documents")
 
 
 # Get document endpoint
@@ -184,7 +222,21 @@ async def get_document(doc_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Get document failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get document")
+
+
+# Delete document endpoint
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str) -> Dict[str, Any]:
+    """Delete a document and all associated extracted data."""
+    try:
+        result = await delete_document_tool(doc_id=doc_id, db_path=db_path)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Delete document failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete document")
 
 
 # Query documents endpoint
@@ -208,7 +260,7 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
         return {"results": results, "count": len(results)}
     except Exception as e:
         logger.error(f"Query failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Query execution failed")
 
 
 # Entity aliases endpoint
@@ -232,7 +284,7 @@ async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"Entity aliases failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Entity alias lookup failed")
 
 
 # Export assessment endpoint
@@ -263,7 +315,7 @@ async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Export failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Export failed")
 
 
 if __name__ == "__main__":

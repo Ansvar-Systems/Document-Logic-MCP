@@ -98,7 +98,7 @@ class DocumentExtractor:
             extraction_model_override: Optional model override (takes precedence over env var)
         """
         self.gateway_url = os.getenv("LLM_GATEWAY_URL")
-        self.gateway_token = os.getenv("LLM_GATEWAY_API_KEY", "dev")
+        self.gateway_token = os.getenv("LLM_GATEWAY_API_KEY", "")
         # Use override if provided, otherwise fall back to env var
         self.extraction_model = (
             extraction_model_override
@@ -106,6 +106,10 @@ class DocumentExtractor:
         )
 
         if self.gateway_url:
+            if not self.gateway_token:
+                raise ValueError(
+                    "LLM_GATEWAY_API_KEY must be set when LLM_GATEWAY_URL is configured"
+                )
             logger.info(f"Using LLM Gateway mode: {self.gateway_url}, model: {self.extraction_model}")
             self.llm = None
         else:

@@ -9,7 +9,7 @@ from pathlib import Path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
-from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool
+from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool, delete_document_tool
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,27 @@ def create_server() -> Server:
                         "doc_id": {
                             "type": "string",
                             "description": "Document ID (from parse_document or list_documents)",
+                        }
+                    },
+                    "required": ["doc_id"],
+                },
+            ),
+            Tool(
+                name="delete_document",
+                description=(
+                    "Delete a document and ALL associated extracted data "
+                    "(truths, entities, relationships, sections). "
+                    "This is irreversible. Use for data lifecycle management "
+                    "or when a document should no longer be queryable. "
+                    "Returns: {deleted, filename, status}. "
+                    "On error: {error, error_type} — e.g., invalid_input if doc_id not found."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "doc_id": {
+                            "type": "string",
+                            "description": "Document ID to delete (from parse_document or list_documents)",
                         }
                     },
                     "required": ["doc_id"],
@@ -267,6 +288,13 @@ def create_server() -> Server:
 
         elif name == "get_document":
             result = await get_document_tool(
+                doc_id=arguments["doc_id"],
+                db_path=DEFAULT_DB_PATH,
+            )
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        elif name == "delete_document":
+            result = await delete_document_tool(
                 doc_id=arguments["doc_id"],
                 db_path=DEFAULT_DB_PATH,
             )

@@ -15,16 +15,51 @@ See CONTEXT_SUPPLEMENTS in prompts.py for available contexts:
 """
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from .database import Database
 from .parsers import PDFParser, DOCXParser, JSONParser
 from .extraction import DocumentExtractor
-from typing import List
 
 logger = logging.getLogger(__name__)
+
+# Maximum file size for parsing (default 50 MB)
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_MB", "50")) * 1024 * 1024
+
+# Allowed directories for file access (colon-separated). Empty = allow all (dev mode).
+_allowed_dirs_raw = os.getenv("ALLOWED_DOC_DIRS", "")
+ALLOWED_DOC_DIRS = [Path(p).resolve() for p in _allowed_dirs_raw.split(":") if p.strip()] if _allowed_dirs_raw else []
+
+
+def _validate_file_path(file_path: Path) -> None:
+    """Validate that file_path is within allowed directories and not too large.
+
+    Raises:
+        ValueError: If path is outside allowed directories or file is too large.
+        FileNotFoundError: If file does not exist.
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path.name}")
+
+    resolved = file_path.resolve()
+
+    # Path traversal protection — only when ALLOWED_DOC_DIRS is configured
+    if ALLOWED_DOC_DIRS:
+        if not any(resolved == d or resolved.is_relative_to(d) for d in ALLOWED_DOC_DIRS):
+            raise ValueError(
+                f"Access denied: file is outside allowed directories"
+            )
+
+    # File size check
+    file_size = resolved.stat().st_size
+    if file_size > MAX_FILE_SIZE:
+        raise ValueError(
+            f"File too large: {file_size / (1024*1024):.1f} MB "
+            f"(max {MAX_FILE_SIZE / (1024*1024):.0f} MB)"
+        )
 
 
 async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
@@ -35,9 +70,7 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
     Returns document ID for use in extract_document.
     """
     file_path = Path(file_path)
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
+    _validate_file_path(file_path)
 
     # Select parser based on extension
     suffix = file_path.suffix.lower()
@@ -63,13 +96,14 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
     async with db.connection() as conn:
         # Store document metadata
         await conn.execute("""
-            INSERT INTO documents (doc_id, filename, upload_date, sections_count, status, raw_text)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (doc_id, filename, upload_date, sections_count, page_count, status, raw_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             doc_id,
             parse_result.filename,
             datetime.now().isoformat(),
             len(parse_result.sections),
+            parse_result.page_count,
             "parsed",
             parse_result.raw_text
         ))
@@ -135,7 +169,7 @@ async def extract_document_tool(
     # Get parsed document
     async with db.connection() as conn:
         cursor = await conn.execute(
-            "SELECT filename, raw_text, sections_count FROM documents WHERE doc_id = ?",
+            "SELECT filename, raw_text, sections_count, page_count FROM documents WHERE doc_id = ?",
             (doc_id,)
         )
         row = await cursor.fetchone()
@@ -146,6 +180,7 @@ async def extract_document_tool(
         filename = row["filename"]
         raw_text = row["raw_text"]
         sections_count = row["sections_count"]
+        page_count = row["page_count"] or 1
 
         # Retrieve sections
         cursor = await conn.execute(
@@ -188,7 +223,7 @@ async def extract_document_tool(
         filename=filename,
         sections=sections,
         raw_text=raw_text,
-        page_count=1,
+        page_count=page_count,
         metadata={}
     )
 
@@ -296,10 +331,10 @@ async def extract_document_tool(
                 "analysis_context": analysis_context,
             }
 
-    # Update status
+    # Update status and clear raw_text (no longer needed after extraction)
     async with db.connection() as conn:
         await conn.execute(
-            "UPDATE documents SET status = ? WHERE doc_id = ?",
+            "UPDATE documents SET status = ?, raw_text = NULL WHERE doc_id = ?",
             ("completed", doc_id)
         )
         await conn.commit()
@@ -483,3 +518,55 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     result["relationships"] = relationships
 
     return result
+
+
+async def delete_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
+    """
+    Delete a document and all associated extracted data.
+
+    Cascade deletes: truths, truth_entities, entities, relationships, sections,
+    and the document record itself. Use for data lifecycle management.
+    """
+    db = Database(db_path)
+    await db.initialize()
+
+    async with db.connection() as conn:
+        # Verify document exists
+        cursor = await conn.execute(
+            "SELECT doc_id, filename FROM documents WHERE doc_id = ?",
+            (doc_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise ValueError(f"Document {doc_id} not found")
+
+        filename = row["filename"]
+
+        # Delete in dependency order (child tables first)
+        # truth_entities references both truths and entities
+        await conn.execute("""
+            DELETE FROM truth_entities WHERE truth_id IN (
+                SELECT truth_id FROM truths WHERE doc_id = ?
+            )
+        """, (doc_id,))
+        await conn.execute("DELETE FROM truths WHERE doc_id = ?", (doc_id,))
+        await conn.execute("""
+            DELETE FROM relationships WHERE source_doc_id = ?
+        """, (doc_id,))
+        await conn.execute("""
+            DELETE FROM entity_aliases WHERE entity_id IN (
+                SELECT entity_id FROM entities WHERE doc_id = ?
+            )
+        """, (doc_id,))
+        await conn.execute("DELETE FROM entities WHERE doc_id = ?", (doc_id,))
+        await conn.execute("DELETE FROM sections WHERE doc_id = ?", (doc_id,))
+        await conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+        await conn.commit()
+
+    logger.info(f"Deleted document {doc_id} ({filename}) and all associated data")
+
+    return {
+        "deleted": doc_id,
+        "filename": filename,
+        "status": "deleted",
+    }
