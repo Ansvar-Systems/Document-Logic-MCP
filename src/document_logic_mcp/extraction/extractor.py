@@ -46,37 +46,6 @@ from ..parsers.base import ParseResult
 
 logger = logging.getLogger(__name__)
 
-# Approximate characters-per-token ratio for budget estimation.
-# Conservative (low) estimate — better to over-truncate than to blow the context.
-CHARS_PER_TOKEN = 3.5
-
-# Default model context windows (tokens). Used for synthesis budget checks.
-# If the model isn't listed, we fall back to a conservative 32k default.
-MODEL_CONTEXT_WINDOWS = {
-    "gpt-5": 128_000,
-    "gpt-5.1": 128_000,
-    "gpt-5.2": 128_000,
-    "gpt-4o": 128_000,
-    "gpt-4-turbo": 128_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "claude-opus-4-20250514": 200_000,
-    "claude-3-5-sonnet": 200_000,
-    "qwen3-235b": 32_000,
-}
-DEFAULT_CONTEXT_WINDOW = 32_000
-
-
-def _estimate_context_window(model_name: str) -> int:
-    """Estimate context window size for a model.
-
-    Checks MODEL_CONTEXT_WINDOWS for prefix matches (e.g., "gpt-5.2-chat-latest"
-    matches "gpt-5.2"). Falls back to DEFAULT_CONTEXT_WINDOW.
-    """
-    for prefix, window in MODEL_CONTEXT_WINDOWS.items():
-        if model_name.startswith(prefix):
-            return window
-    return DEFAULT_CONTEXT_WINDOW
-
 
 class DocumentExtractor:
     """Extract structured information from parsed documents.
@@ -237,7 +206,7 @@ class DocumentExtractor:
         """Pass 1: Extract high-level document overview."""
         prompt = OVERVIEW_PROMPT.format(
             filename=parse_result.filename,
-            text=parse_result.raw_text[:200000]  # Allow large docs; gateway truncates if needed
+            text=parse_result.raw_text  # Full document - no truncation
         )
 
         response_text = await self._call_llm(prompt)
@@ -290,7 +259,7 @@ class DocumentExtractor:
             doc_purpose=doc_context.purpose,
             doc_type=doc_context.document_type,
             section_title=section_title,
-            section_content=section_content[:100000],
+            section_content=section_content,  # Full section - no truncation
             context_supplement=context_supplement,
         )
 
@@ -367,23 +336,8 @@ class DocumentExtractor:
             all_truths, all_entities, all_relationships
         )
 
-        # Token budget check — truncate if needed
-        context_window = _estimate_context_window(self.extraction_model)
-        budget_chars = int(context_window * CHARS_PER_TOKEN * 0.80)  # 80% of context
-
-        # Estimate prompt overhead (template + response budget)
-        prompt_overhead = 3000  # ~850 tokens for template chrome + response space
-        available_chars = budget_chars - prompt_overhead
-
-        if len(extracted_data) > available_chars:
-            logger.warning(
-                f"Synthesis input ({len(extracted_data)} chars) exceeds budget "
-                f"({available_chars} chars for {self.extraction_model}). "
-                f"Truncating truths to fit."
-            )
-            extracted_data = self._truncate_synthesis_input(
-                all_truths, all_entities, all_relationships, available_chars
-            )
+        # No truncation — send all extracted data to synthesis.
+        # The LLM provider enforces context window limits with a clear error.
 
         prompt = SYNTHESIS_PROMPT.format(
             filename=filename,
@@ -487,78 +441,3 @@ class DocumentExtractor:
 
         return "\n".join(parts)
 
-    @staticmethod
-    def _truncate_synthesis_input(
-        truths: List[ExtractedTruth],
-        entities: List[ExtractedEntity],
-        relationships: List[ExtractedRelationship],
-        max_chars: int,
-    ) -> str:
-        """Build synthesis input that fits within max_chars.
-
-        Strategy: entities and relationships are usually small — keep them all.
-        Truncate truths (largest payload) by removing low-confidence items first.
-
-        Args:
-            truths: All extracted truths
-            entities: All extracted entities
-            relationships: All extracted relationships
-            max_chars: Maximum character budget
-
-        Returns:
-            Truncated synthesis input string
-        """
-        # Build entities + relationships first (they're small and high-value)
-        entity_lines = [f"ENTITIES ({len(entities)} total):"]
-        for i, e in enumerate(entities):
-            entity_lines.append(f"  E-{i+1}. {e.name} ({e.entity_type}): {e.context}")
-
-        rel_lines = [f"\nRELATIONSHIPS ({len(relationships)} total):"]
-        for i, r in enumerate(relationships):
-            flow_info = ""
-            if r.source_component or r.destination_component:
-                flow_info = (
-                    f" | flow: {r.source_component or '?'} → "
-                    f"{r.destination_component or '?'}"
-                )
-                if r.data_transferred:
-                    flow_info += f" [{r.data_transferred}]"
-                if r.protocol_mechanism:
-                    flow_info += f" via {r.protocol_mechanism}"
-            rel_lines.append(
-                f"  R-{i+1}. {r.entity_a} --[{r.relationship_type}]--> {r.entity_b} "
-                f"(confidence: {r.confidence}){flow_info} | evidence: {r.evidence}"
-            )
-
-        fixed_part = "\n".join(entity_lines + rel_lines)
-        remaining_chars = max_chars - len(fixed_part) - 200  # 200 char buffer
-
-        # Sort truths by confidence descending — keep high-confidence items
-        sorted_truths = sorted(truths, key=lambda t: t.confidence, reverse=True)
-
-        truth_lines = []
-        chars_used = 0
-        kept = 0
-        for t in sorted_truths:
-            citation = f"[Section: {t.section}, Page: {t.page}, Para: {t.paragraph}]"
-            line = (
-                f"  T-{kept+1}. [{t.statement_type.value.upper()}] {t.statement} "
-                f"{citation} (confidence: {t.confidence}, entities: {t.entities})"
-            )
-            if chars_used + len(line) + 1 > remaining_chars:
-                break
-            truth_lines.append(line)
-            chars_used += len(line) + 1
-            kept += 1
-
-        truncated = len(truths) - kept
-        header = f"TRUTHS ({kept} of {len(truths)} shown, {truncated} truncated — sorted by confidence):"
-        truth_part = "\n".join([header] + truth_lines)
-
-        logger.info(
-            f"Synthesis input truncated: kept {kept}/{len(truths)} truths "
-            f"(dropped {truncated} lowest-confidence), "
-            f"total chars: {len(truth_part) + len(fixed_part)}/{max_chars}"
-        )
-
-        return truth_part + "\n" + fixed_part
