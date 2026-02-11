@@ -1,0 +1,641 @@
+{
+  "$schema": "technology_terminology/v1",
+  "description": "Canonical technology names and known aliases for deterministic normalization in the STRIDE pipeline. Used by resolve_technology_name tool to normalize entity technology fields before LLM-based semantic dedup.",
+  "matching_rules": {
+    "case_sensitive": false,
+    "strip_version_pattern": "\\s*v?\\d+[\\d.]*(-\\w+)?\\s*$",
+    "fuzzy_threshold": 0.85,
+    "ambiguous_action": "return_null"
+  },
+  "entries": [
+
+    {
+      "canonical_name": "PostgreSQL",
+      "aliases": ["Postgres", "PG", "PostgresSQL", "PGSQL", "pg database", "Postgres DB", "PostgreSQL DB"],
+      "category": "Relational Database",
+      "disambiguation_note": "A system may have multiple PostgreSQL instances (e.g., app DB vs audit DB). Only normalize the technology name — do NOT merge separate database entities."
+    },
+    {
+      "canonical_name": "MySQL",
+      "aliases": ["My SQL", "mysql", "MySQL DB", "MariaDB-compatible MySQL"],
+      "category": "Relational Database",
+      "disambiguation_note": "Do not merge with MariaDB unless the document explicitly states they are the same instance."
+    },
+    {
+      "canonical_name": "MariaDB",
+      "aliases": ["Maria DB", "maria", "MariaDB Server"],
+      "category": "Relational Database",
+      "disambiguation_note": "Fork of MySQL. Do not merge with MySQL unless document confirms same deployment."
+    },
+    {
+      "canonical_name": "Microsoft SQL Server",
+      "aliases": ["MSSQL", "MS SQL", "SQL Server", "MSSQL Server", "Azure SQL", "Azure SQL Database", "SQL Server DB", "T-SQL database"],
+      "category": "Relational Database",
+      "disambiguation_note": "Azure SQL and SQL Server are distinct deployment models. Normalize to 'Microsoft SQL Server' for on-prem, keep 'Azure SQL Database' for cloud-managed."
+    },
+    {
+      "canonical_name": "Oracle Database",
+      "aliases": ["Oracle", "Oracle DB", "OracleDB", "Oracle RDBMS", "Oracle 19c", "Oracle Exadata"],
+      "category": "Relational Database",
+      "disambiguation_note": "Exadata is an appliance running Oracle Database. Normalize to Oracle Database unless hardware specifics matter."
+    },
+    {
+      "canonical_name": "IBM Db2",
+      "aliases": ["DB2", "Db2", "IBM DB2", "Db2 for z/OS", "Db2 LUW"],
+      "category": "Relational Database",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "SQLite",
+      "aliases": ["sqlite", "sqlite3", "SQLite DB"],
+      "category": "Embedded Database",
+      "disambiguation_note": "Typically embedded, not a standalone service. Flag if used as primary data store in production."
+    },
+
+    {
+      "canonical_name": "MongoDB",
+      "aliases": ["Mongo", "Mongo DB", "MongoDB Atlas", "MongoDB cluster"],
+      "category": "Document Database",
+      "disambiguation_note": "MongoDB Atlas is the cloud-managed variant. Normalize technology name, preserve hosting detail on the entity."
+    },
+    {
+      "canonical_name": "Amazon DynamoDB",
+      "aliases": ["DynamoDB", "Dynamo DB", "Dynamo", "AWS DynamoDB"],
+      "category": "Key-Value / Document Database",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Apache Cassandra",
+      "aliases": ["Cassandra", "Cassandra DB", "DataStax Cassandra", "DSE"],
+      "category": "Wide-Column Database",
+      "disambiguation_note": "DataStax Enterprise (DSE) is a commercial Cassandra distribution. Normalize unless DSE-specific features are referenced."
+    },
+    {
+      "canonical_name": "CouchDB",
+      "aliases": ["Couch DB", "Apache CouchDB", "Couchbase"],
+      "category": "Document Database",
+      "disambiguation_note": "CouchDB and Couchbase are different products. Only merge if document clearly refers to the same system."
+    },
+    {
+      "canonical_name": "Neo4j",
+      "aliases": ["Neo4J", "neo4j", "Neo4j Graph Database", "Neo4j Aura"],
+      "category": "Graph Database",
+      "disambiguation_note": null
+    },
+
+    {
+      "canonical_name": "Redis",
+      "aliases": ["Redis Cache", "Redis cluster", "Redis Sentinel", "ElastiCache Redis", "Azure Cache for Redis", "session cache (Redis)"],
+      "category": "In-Memory Cache / Data Store",
+      "disambiguation_note": "Generic terms like 'session cache' or 'caching layer' should only resolve to Redis if the document elsewhere confirms Redis is the technology. Otherwise leave as-is."
+    },
+    {
+      "canonical_name": "Memcached",
+      "aliases": ["memcache", "Memcache", "ElastiCache Memcached", "memory cache (Memcached)"],
+      "category": "In-Memory Cache",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Hazelcast",
+      "aliases": ["Hazelcast IMDG", "Hazelcast Platform", "HZ cluster"],
+      "category": "In-Memory Data Grid",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Apache Ignite",
+      "aliases": ["Ignite", "GridGain", "Apache Ignite cluster"],
+      "category": "In-Memory Data Grid",
+      "disambiguation_note": "GridGain is the commercial distribution of Apache Ignite."
+    },
+
+    {
+      "canonical_name": "Apache Kafka",
+      "aliases": ["Kafka", "Kafka cluster", "Confluent Kafka", "Confluent Platform", "Confluent Cloud", "Amazon MSK", "Azure Event Hubs (Kafka)", "event bus (Kafka)", "message broker (Kafka)"],
+      "category": "Event Streaming Platform",
+      "disambiguation_note": "Azure Event Hubs has a Kafka-compatible endpoint but is a different product. Normalize to Kafka only if the document uses the Kafka protocol."
+    },
+    {
+      "canonical_name": "RabbitMQ",
+      "aliases": ["Rabbit MQ", "RabbitMQ cluster", "AMQP broker", "message queue (RabbitMQ)", "Amazon MQ (RabbitMQ)"],
+      "category": "Message Broker",
+      "disambiguation_note": "Generic 'AMQP broker' should only resolve to RabbitMQ if confirmed in the document."
+    },
+    {
+      "canonical_name": "Azure Service Bus",
+      "aliases": ["Service Bus", "ASB", "Azure SB", "Azure message queue"],
+      "category": "Message Broker",
+      "disambiguation_note": "Do not confuse with Azure Event Hubs (different product, different use case)."
+    },
+    {
+      "canonical_name": "Azure Event Hubs",
+      "aliases": ["Event Hubs", "Azure EH", "Azure event streaming"],
+      "category": "Event Streaming Platform",
+      "disambiguation_note": "Distinct from Azure Service Bus. Event Hubs is for high-throughput streaming, Service Bus is for transactional messaging."
+    },
+    {
+      "canonical_name": "Amazon SQS",
+      "aliases": ["SQS", "AWS SQS", "Simple Queue Service", "Amazon Simple Queue Service"],
+      "category": "Message Queue",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Amazon SNS",
+      "aliases": ["SNS", "AWS SNS", "Simple Notification Service"],
+      "category": "Pub/Sub Messaging",
+      "disambiguation_note": "SNS is pub/sub (fan-out), SQS is point-to-point queue. Do not merge."
+    },
+    {
+      "canonical_name": "NATS",
+      "aliases": ["NATS.io", "NATS JetStream", "NATS Streaming", "NATS server"],
+      "category": "Message Broker",
+      "disambiguation_note": "NATS JetStream is the persistent streaming layer of NATS."
+    },
+    {
+      "canonical_name": "Apache ActiveMQ",
+      "aliases": ["ActiveMQ", "ActiveMQ Artemis", "Amazon MQ (ActiveMQ)"],
+      "category": "Message Broker",
+      "disambiguation_note": "ActiveMQ Classic and ActiveMQ Artemis are different codebases. Normalize unless the distinction matters."
+    },
+    {
+      "canonical_name": "Google Cloud Pub/Sub",
+      "aliases": ["Pub/Sub", "GCP Pub/Sub", "Cloud Pub/Sub"],
+      "category": "Pub/Sub Messaging",
+      "disambiguation_note": "Generic 'pub/sub' is a pattern, not a product. Only resolve if GCP is confirmed."
+    },
+
+    {
+      "canonical_name": "Azure API Management",
+      "aliases": ["Azure APIM", "APIM", "Azure API Gateway", "API Management Gateway", "Azure API Management Service"],
+      "category": "API Gateway",
+      "disambiguation_note": "Generic 'API Gateway' should only resolve to Azure APIM if Azure context is confirmed."
+    },
+    {
+      "canonical_name": "Kong Gateway",
+      "aliases": ["Kong", "Kong API Gateway", "Kong Enterprise", "Kong Ingress Controller"],
+      "category": "API Gateway",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Amazon API Gateway",
+      "aliases": ["AWS API Gateway", "API Gateway (AWS)", "Amazon API GW"],
+      "category": "API Gateway",
+      "disambiguation_note": "Generic 'API Gateway' should only resolve to AWS if AWS context is confirmed."
+    },
+    {
+      "canonical_name": "Nginx",
+      "aliases": ["NGINX", "nginx", "Nginx Plus", "NGINX Plus", "Nginx reverse proxy", "Nginx load balancer", "Nginx Ingress"],
+      "category": "Web Server / Reverse Proxy / API Gateway",
+      "disambiguation_note": "Nginx serves multiple roles (web server, reverse proxy, load balancer, API gateway, ingress controller). Classify based on how the document describes its function."
+    },
+    {
+      "canonical_name": "Envoy Proxy",
+      "aliases": ["Envoy", "Envoy proxy", "Envoy sidecar"],
+      "category": "Service Proxy",
+      "disambiguation_note": "Often used as a sidecar in service meshes (Istio). Normalize to Envoy Proxy."
+    },
+    {
+      "canonical_name": "HAProxy",
+      "aliases": ["HA Proxy", "HAproxy", "haproxy", "HA-Proxy"],
+      "category": "Load Balancer / Reverse Proxy",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Traefik",
+      "aliases": ["Traefik Proxy", "traefik", "Traefik Ingress"],
+      "category": "API Gateway / Ingress Controller",
+      "disambiguation_note": null
+    },
+
+    {
+      "canonical_name": "Microsoft Entra ID",
+      "aliases": ["Azure AD", "Azure Active Directory", "AAD", "Entra ID", "Entra", "Microsoft Azure AD", "Azure AD B2C", "Entra External ID"],
+      "category": "Identity Provider",
+      "disambiguation_note": "Azure AD was renamed to Microsoft Entra ID in 2023. Normalize to Entra ID. Azure AD B2C is now Entra External ID — note as a variant if consumer-facing."
+    },
+    {
+      "canonical_name": "Okta",
+      "aliases": ["Okta Identity", "Okta Workforce Identity", "Okta Customer Identity", "Auth0 (Okta)"],
+      "category": "Identity Provider",
+      "disambiguation_note": "Auth0 is owned by Okta but is a separate product. Only merge if the document treats them as one."
+    },
+    {
+      "canonical_name": "Auth0",
+      "aliases": ["auth0", "Auth 0", "Auth0 by Okta"],
+      "category": "Identity Provider",
+      "disambiguation_note": "Separate product from Okta Workforce Identity. Do not merge with Okta unless document confirms same deployment."
+    },
+    {
+      "canonical_name": "Keycloak",
+      "aliases": ["Key Cloak", "keycloak", "Red Hat SSO", "RH-SSO", "Red Hat Single Sign-On"],
+      "category": "Identity Provider",
+      "disambiguation_note": "Red Hat SSO is the commercial distribution of Keycloak."
+    },
+    {
+      "canonical_name": "Ping Identity",
+      "aliases": ["PingFederate", "PingOne", "PingAccess", "Ping", "PingIdentity"],
+      "category": "Identity Provider",
+      "disambiguation_note": "PingFederate (federation), PingOne (cloud), PingAccess (access management) are distinct products. Normalize to Ping Identity unless product-specific features are referenced."
+    },
+    {
+      "canonical_name": "Active Directory (on-premises)",
+      "aliases": ["AD", "Active Directory", "AD DS", "Active Directory Domain Services", "on-prem AD", "LDAP (Active Directory)"],
+      "category": "Directory Service",
+      "disambiguation_note": "Do NOT merge with Microsoft Entra ID (cloud). On-prem AD and Entra ID are distinct systems even when synced via AD Connect."
+    },
+    {
+      "canonical_name": "AWS IAM",
+      "aliases": ["IAM", "AWS Identity and Access Management", "IAM roles"],
+      "category": "Cloud IAM",
+      "disambiguation_note": "Generic 'IAM' should only resolve to AWS IAM if AWS context is confirmed. Many platforms have their own IAM."
+    },
+
+    {
+      "canonical_name": "Kubernetes",
+      "aliases": ["K8s", "k8s", "Kube", "Kubernetes cluster", "K8s cluster", "container orchestration", "container orchestration platform"],
+      "category": "Container Orchestration",
+      "disambiguation_note": "Generic 'container orchestration' should only resolve to Kubernetes if confirmed. Normalize managed variants (AKS, EKS, GKE) to their specific names, not generic Kubernetes."
+    },
+    {
+      "canonical_name": "Azure Kubernetes Service",
+      "aliases": ["AKS", "Azure AKS", "AKS cluster", "Azure K8s"],
+      "category": "Managed Kubernetes",
+      "disambiguation_note": "AKS is managed Kubernetes on Azure. Normalize to AKS, not generic Kubernetes, to preserve cloud context for threat modeling."
+    },
+    {
+      "canonical_name": "Amazon Elastic Kubernetes Service",
+      "aliases": ["EKS", "AWS EKS", "Amazon EKS", "EKS cluster"],
+      "category": "Managed Kubernetes",
+      "disambiguation_note": "Preserve 'EKS' to retain AWS hosting context."
+    },
+    {
+      "canonical_name": "Google Kubernetes Engine",
+      "aliases": ["GKE", "Google GKE", "GKE cluster"],
+      "category": "Managed Kubernetes",
+      "disambiguation_note": "Preserve 'GKE' to retain GCP hosting context."
+    },
+    {
+      "canonical_name": "Red Hat OpenShift",
+      "aliases": ["OpenShift", "OCP", "OpenShift Container Platform", "OKD"],
+      "category": "Container Orchestration Platform",
+      "disambiguation_note": "OpenShift is built on Kubernetes but adds enterprise features. Do not normalize to generic Kubernetes."
+    },
+    {
+      "canonical_name": "Amazon ECS",
+      "aliases": ["ECS", "AWS ECS", "Elastic Container Service", "ECS Fargate", "Fargate"],
+      "category": "Container Orchestration",
+      "disambiguation_note": "Fargate is a serverless compute engine for ECS (and EKS). Normalize 'Fargate' to 'Amazon ECS (Fargate)' unless used with EKS."
+    },
+    {
+      "canonical_name": "Docker",
+      "aliases": ["docker", "Docker Engine", "Docker containers", "Docker Compose", "Docker Swarm"],
+      "category": "Container Runtime",
+      "disambiguation_note": "Docker is a runtime, not an orchestrator. Docker Swarm is an orchestrator but rarely used in enterprise. Classify based on usage."
+    },
+
+    {
+      "canonical_name": "Elasticsearch (Elastic Stack)",
+      "aliases": ["ELK", "ELK Stack", "Elasticsearch", "Elastic", "ES cluster", "Elastic Stack", "ELK stack", "Elasticsearch cluster", "Elasticsearch stack", "OpenSearch"],
+      "category": "Search Engine / Log Store",
+      "disambiguation_note": "Only merge when referring to the same deployment. A system may have separate Elasticsearch clusters for logging vs. search. OpenSearch is an AWS fork — normalize separately if AWS-hosted."
+    },
+    {
+      "canonical_name": "Logstash",
+      "aliases": ["logstash", "Log Stash", "Logstash pipeline"],
+      "category": "Log Pipeline / ETL",
+      "disambiguation_note": "Part of the Elastic Stack but a distinct component. Do not merge with Elasticsearch entity."
+    },
+    {
+      "canonical_name": "Kibana",
+      "aliases": ["kibana", "Kibana dashboard", "Kibana UI"],
+      "category": "Visualization / Dashboard",
+      "disambiguation_note": "Part of the Elastic Stack but a distinct component. Do not merge with Elasticsearch entity."
+    },
+    {
+      "canonical_name": "Datadog",
+      "aliases": ["DataDog", "DD", "Datadog APM", "Datadog Logs", "Datadog monitoring"],
+      "category": "Observability Platform",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Splunk",
+      "aliases": ["Splunk Enterprise", "Splunk Cloud", "Splunk SIEM", "Splunk SOAR"],
+      "category": "SIEM / Log Analytics",
+      "disambiguation_note": "Splunk SOAR (formerly Phantom) is a separate product for security orchestration."
+    },
+    {
+      "canonical_name": "Grafana",
+      "aliases": ["grafana", "Grafana Cloud", "Grafana dashboard", "Grafana OSS"],
+      "category": "Visualization / Dashboard",
+      "disambiguation_note": "Grafana is visualization. Often paired with Prometheus (metrics) or Loki (logs). Do not merge with data sources."
+    },
+    {
+      "canonical_name": "Prometheus",
+      "aliases": ["prometheus", "Prom", "Prometheus server", "Prometheus metrics"],
+      "category": "Metrics / Monitoring",
+      "disambiguation_note": "Often paired with Grafana but is a distinct system. Do not merge."
+    },
+    {
+      "canonical_name": "Azure Monitor",
+      "aliases": ["Azure Monitoring", "Azure Log Analytics", "Application Insights", "App Insights", "Azure Application Insights"],
+      "category": "Cloud Monitoring",
+      "disambiguation_note": "Application Insights is a feature within Azure Monitor. Normalize to Azure Monitor unless App Insights-specific features are referenced."
+    },
+    {
+      "canonical_name": "AWS CloudWatch",
+      "aliases": ["CloudWatch", "CW", "CloudWatch Logs", "CloudWatch Metrics", "CloudWatch Alarms"],
+      "category": "Cloud Monitoring",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "New Relic",
+      "aliases": ["NewRelic", "New Relic One", "New Relic APM", "NRQL"],
+      "category": "Observability Platform",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "PagerDuty",
+      "aliases": ["Pager Duty", "PagerDuty alerts", "PD"],
+      "category": "Incident Management",
+      "disambiguation_note": "Alerting/incident management, not monitoring. Do not merge with monitoring tools."
+    },
+
+    {
+      "canonical_name": "Cloudflare",
+      "aliases": ["CloudFlare", "CF", "Cloudflare CDN", "Cloudflare WAF", "Cloudflare Workers"],
+      "category": "CDN / WAF / Edge Platform",
+      "disambiguation_note": "Cloudflare provides CDN, WAF, DDoS protection, DNS, and edge compute. Classify based on documented function."
+    },
+    {
+      "canonical_name": "Azure Front Door",
+      "aliases": ["AFD", "Azure Front Door Premium", "Azure FD", "Azure Front Door WAF"],
+      "category": "CDN / WAF / Load Balancer",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "AWS CloudFront",
+      "aliases": ["CloudFront", "CF (AWS)", "Amazon CloudFront"],
+      "category": "CDN",
+      "disambiguation_note": "CloudFront is CDN only. AWS WAF is a separate product often attached to CloudFront."
+    },
+    {
+      "canonical_name": "AWS WAF",
+      "aliases": ["Amazon WAF", "WAF (AWS)", "AWS Web Application Firewall"],
+      "category": "Web Application Firewall",
+      "disambiguation_note": "Separate product from CloudFront. Often co-deployed but distinct."
+    },
+    {
+      "canonical_name": "Azure WAF",
+      "aliases": ["Azure Web Application Firewall", "WAF (Azure)"],
+      "category": "Web Application Firewall",
+      "disambiguation_note": "Can be attached to Azure Front Door or Application Gateway. Preserve the association."
+    },
+    {
+      "canonical_name": "Akamai",
+      "aliases": ["Akamai CDN", "Akamai WAF", "Akamai Kona", "Akamai Prolexic"],
+      "category": "CDN / WAF / DDoS Protection",
+      "disambiguation_note": "Kona is WAF, Prolexic is DDoS. Normalize to Akamai unless specific product matters."
+    },
+    {
+      "canonical_name": "F5 BIG-IP",
+      "aliases": ["F5", "BIG-IP", "F5 WAF", "F5 load balancer", "F5 ASM", "F5 Advanced WAF"],
+      "category": "Load Balancer / WAF",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "ModSecurity",
+      "aliases": ["mod_security", "ModSec", "OWASP ModSecurity"],
+      "category": "Web Application Firewall",
+      "disambiguation_note": "Open-source WAF engine. Often runs inside Nginx or Apache."
+    },
+
+    {
+      "canonical_name": "HashiCorp Vault",
+      "aliases": ["Vault", "HCP Vault", "HashiCorp Vault Enterprise", "Vault OSS", "vault server"],
+      "category": "Secrets Management",
+      "disambiguation_note": "Generic 'vault' or 'the vault' in banking context may refer to a physical vault, not HashiCorp. Confirm technology context."
+    },
+    {
+      "canonical_name": "Azure Key Vault",
+      "aliases": ["AKV", "Key Vault", "Azure KV", "Azure Key Vault HSM"],
+      "category": "Secrets Management / Key Management",
+      "disambiguation_note": "Generic 'key vault' should only resolve to Azure if Azure context is confirmed."
+    },
+    {
+      "canonical_name": "AWS Secrets Manager",
+      "aliases": ["Secrets Manager", "ASM (AWS)", "AWS SM"],
+      "category": "Secrets Management",
+      "disambiguation_note": "Distinct from AWS Systems Manager Parameter Store. Do not merge."
+    },
+    {
+      "canonical_name": "AWS KMS",
+      "aliases": ["KMS", "Key Management Service", "AWS Key Management Service"],
+      "category": "Key Management",
+      "disambiguation_note": "Generic 'KMS' should only resolve to AWS if AWS context is confirmed. Azure and GCP have their own KMS."
+    },
+    {
+      "canonical_name": "CyberArk",
+      "aliases": ["CyberArk PAM", "CyberArk Privileged Access Manager", "CyberArk Vault", "CyberArk EPM"],
+      "category": "Privileged Access Management",
+      "disambiguation_note": "Enterprise PAM solution. Do not confuse CyberArk Vault with HashiCorp Vault."
+    },
+
+    {
+      "canonical_name": "Jenkins",
+      "aliases": ["jenkins", "Jenkins CI", "Jenkins pipeline", "Jenkins server", "Jenkins CI/CD"],
+      "category": "CI/CD",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "GitHub Actions",
+      "aliases": ["GH Actions", "GitHub CI", "GitHub CI/CD", "GitHub workflows"],
+      "category": "CI/CD",
+      "disambiguation_note": "Part of GitHub. Do not merge with GitHub (the platform) as an entity."
+    },
+    {
+      "canonical_name": "GitLab CI/CD",
+      "aliases": ["GitLab CI", "GitLab pipelines", "GitLab Runner", "GitLab CI/CD pipelines"],
+      "category": "CI/CD",
+      "disambiguation_note": "Part of GitLab. Do not merge with GitLab (the platform) as an entity."
+    },
+    {
+      "canonical_name": "Azure DevOps",
+      "aliases": ["ADO", "Azure DevOps Pipelines", "Azure Pipelines", "VSTS", "Visual Studio Team Services", "TFS", "Team Foundation Server"],
+      "category": "CI/CD / DevOps Platform",
+      "disambiguation_note": "TFS and VSTS are legacy names. Normalize to Azure DevOps."
+    },
+    {
+      "canonical_name": "ArgoCD",
+      "aliases": ["Argo CD", "argo-cd", "Argo GitOps"],
+      "category": "GitOps / Continuous Delivery",
+      "disambiguation_note": "Argo CD is for GitOps deployment. Argo Workflows is a separate product for workflow orchestration."
+    },
+    {
+      "canonical_name": "Terraform",
+      "aliases": ["terraform", "TF", "HashiCorp Terraform", "Terraform Cloud", "Terraform Enterprise", "OpenTofu"],
+      "category": "Infrastructure as Code",
+      "disambiguation_note": "OpenTofu is a fork of Terraform. Normalize separately if the document specifies OpenTofu."
+    },
+    {
+      "canonical_name": "Ansible",
+      "aliases": ["ansible", "Red Hat Ansible", "Ansible Tower", "Ansible AWX", "Ansible Automation Platform"],
+      "category": "Configuration Management / Automation",
+      "disambiguation_note": null
+    },
+
+    {
+      "canonical_name": "Amazon S3",
+      "aliases": ["S3", "AWS S3", "S3 bucket", "Simple Storage Service", "S3-compatible storage"],
+      "category": "Object Storage",
+      "disambiguation_note": "Generic 'S3-compatible' may refer to MinIO or other implementations. Only resolve to Amazon S3 if AWS context is confirmed."
+    },
+    {
+      "canonical_name": "Azure Blob Storage",
+      "aliases": ["Blob Storage", "Azure Blob", "Azure Storage Account", "ADLS", "Azure Data Lake Storage", "Azure Data Lake"],
+      "category": "Object Storage / Data Lake",
+      "disambiguation_note": "Azure Data Lake Storage Gen2 is built on Blob Storage but has additional capabilities. Preserve the distinction if referenced."
+    },
+    {
+      "canonical_name": "Google Cloud Storage",
+      "aliases": ["GCS", "Cloud Storage", "GCP Storage"],
+      "category": "Object Storage",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "MinIO",
+      "aliases": ["minio", "MinIO S3", "S3-compatible (MinIO)"],
+      "category": "Object Storage (S3-compatible)",
+      "disambiguation_note": "Self-hosted S3-compatible storage. Do not merge with Amazon S3."
+    },
+
+    {
+      "canonical_name": "Istio",
+      "aliases": ["istio", "Istio service mesh", "Istio mesh"],
+      "category": "Service Mesh",
+      "disambiguation_note": "Uses Envoy as sidecar proxy. Istio and Envoy are distinct entities."
+    },
+    {
+      "canonical_name": "Linkerd",
+      "aliases": ["linkerd", "Linkerd service mesh"],
+      "category": "Service Mesh",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "HashiCorp Consul",
+      "aliases": ["Consul", "Consul Connect", "Consul service mesh"],
+      "category": "Service Discovery / Service Mesh",
+      "disambiguation_note": null
+    },
+
+    {
+      "canonical_name": "Apache Airflow",
+      "aliases": ["Airflow", "MWAA", "Amazon MWAA", "Cloud Composer"],
+      "category": "Workflow Orchestration",
+      "disambiguation_note": "Cloud Composer is GCP-managed Airflow. MWAA is AWS-managed Airflow."
+    },
+    {
+      "canonical_name": "Snowflake",
+      "aliases": ["Snowflake Data Cloud", "Snowflake DW", "Snowflake warehouse"],
+      "category": "Cloud Data Warehouse",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Databricks",
+      "aliases": ["Databricks Lakehouse", "Databricks workspace", "Azure Databricks", "Databricks on AWS"],
+      "category": "Data Platform / Lakehouse",
+      "disambiguation_note": null
+    },
+
+    {
+      "canonical_name": "Pinecone",
+      "aliases": ["pinecone", "Pinecone DB", "Pinecone vector database"],
+      "category": "Vector Database",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Weaviate",
+      "aliases": ["weaviate", "Weaviate DB", "Weaviate vector store"],
+      "category": "Vector Database",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Qdrant",
+      "aliases": ["qdrant", "Qdrant DB", "Qdrant vector store"],
+      "category": "Vector Database",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Milvus",
+      "aliases": ["milvus", "Zilliz", "Zilliz Cloud"],
+      "category": "Vector Database",
+      "disambiguation_note": "Zilliz Cloud is the managed version of Milvus."
+    },
+    {
+      "canonical_name": "pgvector",
+      "aliases": ["pg_vector", "pgvector extension", "PostgreSQL vector"],
+      "category": "Vector Extension (PostgreSQL)",
+      "disambiguation_note": "pgvector is a PostgreSQL extension, not a standalone database. The entity should be the PostgreSQL instance; pgvector is a capability."
+    },
+
+    {
+      "canonical_name": "Azure OpenAI Service",
+      "aliases": ["Azure OpenAI", "AOAI", "Azure GPT", "Azure GPT-4", "Azure ChatGPT"],
+      "category": "AI / LLM API",
+      "disambiguation_note": "Distinct from OpenAI API (direct). Normalize to 'Azure OpenAI Service' to preserve hosting context (EU data residency)."
+    },
+    {
+      "canonical_name": "OpenAI API",
+      "aliases": ["OpenAI", "ChatGPT API", "GPT API", "GPT-4 API", "GPT-5 API"],
+      "category": "AI / LLM API",
+      "disambiguation_note": "Direct OpenAI API (US-hosted). Do NOT merge with Azure OpenAI Service."
+    },
+    {
+      "canonical_name": "Anthropic Claude",
+      "aliases": ["Claude", "Claude API", "Anthropic API", "Claude 3", "Claude Sonnet", "Claude Opus"],
+      "category": "AI / LLM API",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Amazon Bedrock",
+      "aliases": ["Bedrock", "AWS Bedrock"],
+      "category": "AI / LLM Platform",
+      "disambiguation_note": "Multi-model platform. Preserve which model is used if specified."
+    },
+    {
+      "canonical_name": "Google Vertex AI",
+      "aliases": ["Vertex AI", "Vertex", "GCP Vertex", "Gemini API (Vertex)"],
+      "category": "AI / ML Platform",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "LangChain",
+      "aliases": ["langchain", "LangChain framework", "LangSmith"],
+      "category": "AI / Agent Framework",
+      "disambiguation_note": "LangSmith is the observability platform for LangChain. Distinct entities."
+    },
+
+    {
+      "canonical_name": "SonarQube",
+      "aliases": ["Sonar", "SonarCloud", "SonarQube Server", "Sonar scanner"],
+      "category": "Code Quality / SAST",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Snyk",
+      "aliases": ["snyk", "Snyk Open Source", "Snyk Container", "Snyk IaC"],
+      "category": "Security Scanning (SCA / Container / IaC)",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Trivy",
+      "aliases": ["trivy", "Aqua Trivy"],
+      "category": "Container / IaC Security Scanner",
+      "disambiguation_note": null
+    },
+    {
+      "canonical_name": "Checkmarx",
+      "aliases": ["checkmarx", "Checkmarx SAST", "Checkmarx SCA", "CxSAST"],
+      "category": "Application Security Testing",
+      "disambiguation_note": null
+    }
+  ]
+}

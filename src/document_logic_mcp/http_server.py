@@ -12,7 +12,11 @@ from fastapi import FastAPI, HTTPException, Security, Depends, Request, APIRoute
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
-from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool, delete_document_tool
+from .tools import (
+    parse_document_tool, extract_document_tool, list_documents_tool,
+    get_document_tool, delete_document_tool,
+    resolve_technology_name_tool, suggest_terminology_addition_tool,
+)
 from .database import Database
 
 logging.basicConfig(level=logging.INFO)
@@ -104,6 +108,16 @@ class QueryDocumentsRequest(BaseModel):
 
 class EntityAliasesRequest(BaseModel):
     entity_name: str = Field(..., description="Exact entity name to look up")
+
+
+class ResolveTechnologyNameRequest(BaseModel):
+    raw_name: str = Field(..., description="Raw technology string from source document (e.g., 'ELK Stack', 'PostgreSQL 15.3', 'Azure AD')")
+
+
+class SuggestTerminologyAdditionRequest(BaseModel):
+    raw_string: str = Field(..., description="The unresolved technology string from the source document")
+    resolved_canonical: str | None = Field(None, description="What the agent resolved it to via semantic dedup")
+    context: str | None = Field(None, description="Snippet from the source document providing usage context")
 
 
 class ExportAssessmentRequest(BaseModel):
@@ -285,6 +299,44 @@ async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Entity aliases failed: {e}")
         raise HTTPException(status_code=500, detail="Entity alias lookup failed")
+
+
+# Resolve technology name endpoint
+@app.post("/resolve-technology-name")
+async def resolve_technology_name(request: ResolveTechnologyNameRequest) -> Dict[str, Any]:
+    """Resolve a raw technology string to its canonical name.
+
+    Deterministic normalization using the technology terminology resource.
+    Returns canonical_name, version, match_method (exact/fuzzy), and confidence.
+    Returns null canonical_name when no match or ambiguous.
+    """
+    try:
+        result = await resolve_technology_name_tool(raw_name=request.raw_name)
+        return result
+    except Exception as e:
+        logger.error(f"Resolve technology name failed: {e}")
+        raise HTTPException(status_code=500, detail="Technology name resolution failed")
+
+
+# Suggest terminology addition endpoint
+@app.post("/suggest-terminology-addition")
+async def suggest_terminology_addition(request: SuggestTerminologyAdditionRequest) -> Dict[str, Any]:
+    """Queue a terminology addition suggestion for human review.
+
+    Called when an agent merges technology names not in the terminology table.
+    Persists the suggestion for review — does NOT auto-add to the table.
+    """
+    try:
+        result = await suggest_terminology_addition_tool(
+            raw_string=request.raw_string,
+            resolved_canonical=request.resolved_canonical,
+            context=request.context,
+            db_path=db_path,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Suggest terminology addition failed: {e}")
+        raise HTTPException(status_code=500, detail="Terminology suggestion failed")
 
 
 # Export assessment endpoint

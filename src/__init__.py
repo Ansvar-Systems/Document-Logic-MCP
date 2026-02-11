@@ -1,1 +1,0 @@
-"""Document-Logic MCP package."""

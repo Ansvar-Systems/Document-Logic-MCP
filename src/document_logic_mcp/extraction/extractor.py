@@ -276,7 +276,8 @@ class DocumentExtractor:
                     paragraph=t.get("paragraph"),
                     statement_type=StatementType(t["statement_type"]),
                     confidence=t["confidence"],
-                    entities=t["entities"]
+                    entities=t["entities"],
+                    document_name=filename,
                 )
                 for t in result["truths"]
             ],
@@ -410,7 +411,8 @@ class DocumentExtractor:
         # Truths (usually the largest section)
         parts.append(f"TRUTHS ({len(truths)} total):")
         for i, t in enumerate(truths):
-            citation = f"[Section: {t.section}, Page: {t.page}, Para: {t.paragraph}]"
+            doc_ref = f"Doc: {t.document_name}, " if t.document_name else ""
+            citation = f"[{doc_ref}Section: {t.section}, Page: {t.page}, Para: {t.paragraph}]"
             parts.append(
                 f"  T-{i+1}. [{t.statement_type.value.upper()}] {t.statement} "
                 f"{citation} (confidence: {t.confidence}, entities: {t.entities})"

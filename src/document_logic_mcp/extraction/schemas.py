@@ -48,6 +48,7 @@ class ExtractedTruth:
     statement_type: StatementType
     confidence: float
     entities: List[str]
+    document_name: str = ""  # Source document filename, injected by extractor
 
 
 @dataclass

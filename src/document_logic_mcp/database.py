@@ -128,6 +128,14 @@ class Database:
             except Exception:
                 pass  # Column already exists
 
+            # Migrate existing databases: add page_start to sections if missing
+            try:
+                await db.execute(
+                    "ALTER TABLE sections ADD COLUMN page_start INTEGER"
+                )
+            except Exception:
+                pass  # Column already exists
+
             # Create indexes for common queries
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_truths_doc_id ON truths(doc_id)"

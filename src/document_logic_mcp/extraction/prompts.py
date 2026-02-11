@@ -171,29 +171,59 @@ CONTEXT_SUPPLEMENTS = {
 """,
 
     "tprm_vendor_assessment": """
-**Additional extraction focus (Vendor Assessment):**
+**Additional extraction focus (Vendor Assessment - v3.0):**
 
-- **Certification evidence**: Extract specific certification names, issuing bodies,
-  scope descriptions, validity/expiry dates, and audit cycle frequency. Note
-  whether certifications cover the specific service being assessed or only the
-  vendor's broader organization.
+- **Vendor entity normalization**: Extract ALL variant names for the vendor
+  (legal name, trading names, abbreviations, parent company names, subsidiaries).
+  Identify the most formal version as the canonical name. Example: "Acme
+  Corporation" (canonical), with aliases ["ACME", "Acme Corp.", "Acme Cloud Inc."].
+  Extract Legal Entity Identifier (LEI) if mentioned anywhere in documents.
+  Capture jurisdiction of incorporation (country, state/province if specified).
+
+- **Key personnel identification**: Extract names and roles for senior personnel,
+  especially: CEO, CFO, CTO, CISO, DPO (Data Protection Officer), Security Officer,
+  Compliance Officer. Note where each person is mentioned (DPA signature, org chart,
+  certificate signatory, contact lists).
+
+- **Certification evidence**: Extract specific certification names (ISO 27001, SOC 2,
+  PCI DSS, etc.), issuing bodies, scope descriptions, validity/expiry dates, and
+  audit cycle frequency. Note whether certifications cover the specific service
+  being assessed or only the vendor's broader organization. Capture certificate
+  numbers if present.
 
 - **Subprocessor chains**: Identify all mentioned subprocessors, fourth parties,
-  and their roles. Capture which data each subprocessor accesses and under what
-  contractual framework.
+  and their roles. For EACH subprocessor: canonical name, aliases, jurisdiction,
+  data processing activities (e.g., "cloud infrastructure", "email delivery"),
+  and audit rights. Capture the full subprocessor hierarchy if multiple levels
+  exist (vendor → sub-processor → sub-sub-processor).
 
 - **SLA commitments**: Extract specific numeric SLA values — uptime percentages,
-  response times, resolution times, maintenance windows. Flag any SLA that lacks
-  penalty/remedy clauses.
+  response times (P1/P2/P3), resolution times, maintenance windows, RTO (Recovery
+  Time Objective), RPO (Recovery Point Objective). Flag any SLA that lacks
+  penalty/remedy clauses. Note if SLAs vary by service tier.
 
 - **Data residency and sovereignty**: Capture all mentions of data storage
   locations, processing jurisdictions, and cross-border transfer mechanisms
   (SCCs, adequacy decisions, BCRs). Flag any ambiguity about where data actually
-  resides vs. where it is processed.
+  resides vs. where it is processed. Extract data retention periods and deletion
+  commitments.
 
-- **Incident response obligations**: Extract notification timelines, escalation
-  procedures, evidence preservation commitments, and root cause analysis
-  obligations. Flag if any are missing.
+- **Incident response obligations**: Extract notification timelines (e.g., "72 hours"),
+  escalation procedures, evidence preservation commitments, root cause analysis
+  obligations, and breach notification protocols. Flag if any are missing.
+
+- **Audit and inspection rights**: Extract audit frequency, advance notice periods,
+  scope limitations, and cost allocation. Note if vendor allows on-site inspections
+  vs. only providing audit reports.
+
+**CRITICAL for all entities (vendor, subprocessor, personnel, certification):**
+Every extracted entity MUST include source_document_sections with:
+- document_name: exact filename (e.g., "DPA - Acme Corp 2024.pdf")
+- section: section title or number (e.g., "Annex A: Subprocessors", "§3.2")
+- page: specific page number (not range)
+- excerpt: exact quote from document (max 200 chars)
+
+If you cannot determine the source for an entity, DO NOT extract it.
 """,
 }
 
@@ -273,6 +303,29 @@ given what the document covers. This MUST be contextual:
 "sanitized", "filtered", "encrypted", "secured", "validated", "hardened", "protected",
 "restricted", "monitored" — when used without specifying HOW.
 
+**Context-specific synthesis (if analysis_context="tprm_vendor_assessment"):**
+
+When consolidating vendor assessment documents, ADD these additional sections to the
+output JSON (in addition to the 4 base sections above):
+
+**5. vendor_registry** — Canonical vendor entity with all name variants, LEI, jurisdiction.
+Merge all vendor name mentions across documents into ONE entry with:
+- canonical_name: most formal/legal name
+- aliases: all other names found (trading names, abbreviations, etc.)
+- lei: Legal Entity Identifier if found
+- jurisdiction: country + state/province of incorporation
+- source_document_sections: array of {document_name, section, page, excerpt}
+
+**6. certification_catalog** — All certifications mentioned, deduplicated across documents.
+For each cert: type (ISO 27001, SOC 2, etc.), scope, validity dates, audit body, source.
+
+**7. subprocessor_inventory** — All subprocessors with canonical names, aliases, jurisdictions,
+data processing activities, and audit rights. Include source citations for each.
+
+**8. key_personnel** — Senior staff (CEO, CFO, DPO, CISO, etc.) with roles and source citations.
+
+**9. sla_commitments** — All numeric SLA values (uptime %, RTO, RPO, response times).
+
 Return JSON:
 {{
   "component_registry": [
@@ -306,6 +359,93 @@ Return JSON:
       "source_statement": "User inputs are sanitized before processing",
       "section": "Security Controls",
       "clarification_needed": "Sanitization mechanism unspecified — could mean regex filtering, parameterized queries, HTML encoding, or input length limits"
+    }}
+  ],
+
+  // ─── TPRM-specific fields (only if analysis_context="tprm_vendor_assessment") ───
+
+  "vendor_registry": {{
+    "canonical_name": "Acme Corporation",
+    "aliases": ["ACME", "Acme Corp.", "Acme Cloud Inc."],
+    "lei": "123456789012345678XX",
+    "jurisdiction": "Delaware, USA",
+    "source_document_sections": [
+      {{
+        "document_name": "DPA - Acme Corp 2024.pdf",
+        "section": "1. Parties",
+        "page": 1,
+        "excerpt": "This agreement is between Customer and Acme Corporation (LEI: 123456789012345678XX), incorporated in Delaware"
+      }},
+      {{
+        "document_name": "ISO 27001 Certificate.pdf",
+        "section": "Certificate Header",
+        "page": 1,
+        "excerpt": "This certificate is awarded to Acme Corporation, 123 Main St, Wilmington, DE"
+      }}
+    ]
+  }},
+  "certification_catalog": [
+    {{
+      "type": "ISO 27001",
+      "canonical_name": "ISO/IEC 27001:2013",
+      "scope": "Cloud platform services and data processing operations",
+      "validity": {{"from": "2023-01-15", "to": "2026-01-14"}},
+      "audit_body": "BSI Group",
+      "source_document_sections": [
+        {{
+          "document_name": "ISO 27001 Certificate.pdf",
+          "section": "Certificate Body",
+          "page": 1,
+          "excerpt": "Certificate No. IS 654321. Valid: 15 Jan 2023 - 14 Jan 2026. Certification Body: BSI Group"
+        }}
+      ]
+    }}
+  ],
+  "subprocessor_inventory": [
+    {{
+      "canonical_name": "Amazon Web Services",
+      "aliases": ["AWS", "aws inc"],
+      "jurisdiction": "United States",
+      "data_processing_activities": ["Cloud infrastructure hosting", "Data storage (S3 buckets)"],
+      "audit_rights": "Customer may audit AWS annually with 30 days notice per AWS DPA",
+      "source_document_sections": [
+        {{
+          "document_name": "DPA - Acme Corp 2024.pdf",
+          "section": "Annex A: Subprocessors",
+          "page": 12,
+          "excerpt": "Amazon Web Services, Inc. (AWS) - Cloud infrastructure hosting for production systems"
+        }}
+      ]
+    }}
+  ],
+  "key_personnel": [
+    {{
+      "name": "John Smith",
+      "role": "CEO",
+      "source_document_sections": [
+        {{
+          "document_name": "DPA - Acme Corp 2024.pdf",
+          "section": "13. Notices",
+          "page": 8,
+          "excerpt": "For Acme Corporation: John Smith, CEO, john.smith@acme.com"
+        }}
+      ]
+    }}
+  ],
+  "sla_commitments": [
+    {{
+      "metric": "uptime",
+      "value": "99.9%",
+      "scope": "Production API endpoints",
+      "penalty": "10% monthly credit for downtime >0.1%",
+      "source_document_sections": [
+        {{
+          "document_name": "SLA - Acme Services 2024.pdf",
+          "section": "2. Service Level Objectives",
+          "page": 3,
+          "excerpt": "Service availability: 99.9% uptime measured monthly for production API endpoints"
+        }}
+      ]
     }}
   ]
 }}

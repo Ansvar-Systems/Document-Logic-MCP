@@ -23,6 +23,7 @@ from typing import Dict, Any, Optional, List
 from .database import Database
 from .parsers import PDFParser, DOCXParser, JSONParser
 from .extraction import DocumentExtractor
+from .resources import resolve_technology_name as _resolve_tech, suggest_terminology_addition as _suggest_term
 
 logger = logging.getLogger(__name__)
 
@@ -112,14 +113,15 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
         for idx, section in enumerate(parse_result.sections):
             section_id = str(uuid.uuid4())
             await conn.execute("""
-                INSERT INTO sections (section_id, doc_id, title, content, section_index)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO sections (section_id, doc_id, title, content, section_index, page_start)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 section_id,
                 doc_id,
                 section.title,
                 section.content,
-                idx
+                idx,
+                section.page_start,
             ))
 
         await conn.commit()
@@ -182,13 +184,20 @@ async def extract_document_tool(
         sections_count = row["sections_count"]
         page_count = row["page_count"] or 1
 
-        # Retrieve sections
+        # Retrieve sections (page_start may be NULL for pre-migration data)
         cursor = await conn.execute(
-            "SELECT title, content FROM sections WHERE doc_id = ? ORDER BY section_index",
+            "SELECT title, content, page_start FROM sections WHERE doc_id = ? ORDER BY section_index",
             (doc_id,)
         )
         section_rows = await cursor.fetchall()
-        sections = [Section(title=row["title"], content=row["content"]) for row in section_rows]
+        sections = [
+            Section(
+                title=row["title"],
+                content=row["content"],
+                page_start=row["page_start"],
+            )
+            for row in section_rows
+        ]
 
     logger.info(
         f"Starting extraction for {filename}... "
@@ -245,7 +254,7 @@ async def extract_document_tool(
             section_content=section.content,
             doc_context=overview,
             filename=filename,
-            page=None,
+            page=section.page_start,
             analysis_context=analysis_context,
         )
 
@@ -365,6 +374,7 @@ async def extract_document_tool(
                 "statement_type": t.statement_type.value,
                 "confidence": t.confidence,
                 "entities": t.entities,
+                "document_name": t.document_name,
             }
             for t in all_truths
         ],
@@ -570,3 +580,120 @@ async def delete_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         "filename": filename,
         "status": "deleted",
     }
+
+
+async def resolve_technology_name_tool(raw_name: str) -> Dict[str, Any]:
+    """
+    Resolve a raw technology string to its canonical name using the
+    technology terminology resource.
+
+    Deterministic normalization that handles:
+    - Aliases: "ELK Stack" → "Elasticsearch (Elastic Stack)"
+    - Abbreviations: "PG" → "PostgreSQL"
+    - Version stripping: "PostgreSQL 15.3" → canonical "PostgreSQL", version "15.3"
+    - Typo correction: "Elasticsearh" → "Elasticsearch (Elastic Stack)" (fuzzy, 0.85 threshold)
+    - Renames: "Azure AD" → "Microsoft Entra ID"
+
+    Returns null canonical_name when no match is found or when the match is
+    ambiguous (multiple possible canonicals for the same alias).
+    """
+    result = _resolve_tech(raw_name)
+
+    # Determine match method and confidence for downstream agents
+    if not result["matched"]:
+        return {
+            "canonical_name": None,
+            "original": result["original"],
+            "version": result["version"],
+            "category": None,
+            "match_method": None,
+            "confidence": 0.0,
+            "disambiguation_note": result["disambiguation_note"],
+        }
+
+    # Determine match method: exact vs fuzzy
+    # If the lowered, version-stripped input is in the alias index directly, it's exact
+    from . import resources as _res_mod
+    _res_mod._load_terminology()
+
+    stripped = _res_mod._VERSION_PATTERN.sub("", raw_name.strip()).strip().lower()
+    is_exact = stripped in _res_mod._ALIAS_INDEX and _res_mod._ALIAS_INDEX[stripped] is not None
+
+    return {
+        "canonical_name": result["canonical_name"],
+        "original": result["original"],
+        "version": result["version"],
+        "category": result["category"],
+        "match_method": "exact" if is_exact else "fuzzy",
+        "confidence": 1.0 if is_exact else 0.85,
+        "disambiguation_note": result["disambiguation_note"],
+    }
+
+
+async def suggest_terminology_addition_tool(
+    raw_string: str,
+    resolved_canonical: str | None = None,
+    context: str | None = None,
+    db_path: Path | None = None,
+) -> Dict[str, Any]:
+    """
+    Queue a terminology addition suggestion for human review.
+
+    Called by the DFD Builder when it performs a semantic merge on technology
+    names not already in the terminology table. Suggestions are persisted in
+    the database for review — they do NOT modify the terminology file directly.
+
+    Args:
+        raw_string: The unresolved technology string from the source document
+        resolved_canonical: What the DFD Builder resolved it to (via LLM dedup)
+        context: A snippet from the source document providing usage context
+        db_path: Path to SQLite database for persistence
+    """
+    suggestion = _suggest_term(
+        canonical_name=resolved_canonical or raw_string,
+        aliases=[raw_string],
+        category="Unclassified",
+        disambiguation_note=None,
+        source_engagement=context,
+    )
+
+    # Persist to database if db_path is available
+    if db_path:
+        db = Database(db_path)
+        await db.initialize()
+
+        # Ensure the suggestions table exists
+        async with db.connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS terminology_suggestions (
+                    suggestion_id TEXT PRIMARY KEY,
+                    raw_string TEXT NOT NULL,
+                    resolved_canonical TEXT,
+                    context TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending_review',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    reviewer_action TEXT
+                )
+            """)
+            suggestion_id = str(uuid.uuid4())
+            await conn.execute("""
+                INSERT OR IGNORE INTO terminology_suggestions
+                    (suggestion_id, raw_string, resolved_canonical, context, status, created_at)
+                VALUES (?, ?, ?, ?, 'pending_review', ?)
+            """, (
+                suggestion_id,
+                raw_string,
+                resolved_canonical,
+                context,
+                datetime.now().isoformat(),
+            ))
+            await conn.commit()
+
+        suggestion["suggestion_id"] = suggestion_id
+        suggestion["persisted"] = True
+        logger.info(f"Terminology suggestion queued: '{raw_string}' → '{resolved_canonical}'")
+    else:
+        suggestion["persisted"] = False
+
+    return suggestion
