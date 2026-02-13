@@ -1,0 +1,37 @@
+{
+  "manifest_version": "0.3",
+  "name": "document-logic-mcp",
+  "display_name": "Document Logic MCP Server",
+  "version": "0.1.0",
+  "description": "MCP server for structured document intelligence extraction",
+  "author": {
+    "name": "Ansvar Systems",
+    "email": "hello@ansvar.eu",
+    "url": "https://ansvar.eu"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ansvar-Systems/Document-Logic-MCP"
+  },
+  "homepage": "https://ansvar.eu",
+  "keywords": ["mcp", "document", "extraction", "intelligence", "pdf", "docx"],
+  "server": {
+    "type": "python",
+    "entry_point": "run.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["${__dirname}/run.py"],
+      "env": {
+        "PYTHONPATH": "${__dirname}/src:${__dirname}/lib"
+      }
+    }
+  },
+  "tools": [],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}
