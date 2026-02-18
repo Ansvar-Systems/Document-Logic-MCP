@@ -19,7 +19,7 @@ import os
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from .database import Database
 from .parsers import PDFParser, DOCXParser, JSONParser
 from .extraction import DocumentExtractor
@@ -51,7 +51,7 @@ def _validate_file_path(file_path: Path) -> None:
     if ALLOWED_DOC_DIRS:
         if not any(resolved == d or resolved.is_relative_to(d) for d in ALLOWED_DOC_DIRS):
             raise ValueError(
-                f"Access denied: file is outside allowed directories"
+                "Access denied: file is outside allowed directories"
             )
 
     # File size check
@@ -167,7 +167,6 @@ async def extract_document_tool(
     """
     from .parsers.base import ParseResult, Section
     from .storage import ExtractionStorage
-    from .extraction import SourceAuthority
 
     db = Database(db_path)
     await db.initialize()
@@ -185,7 +184,6 @@ async def extract_document_tool(
 
         filename = row["filename"]
         raw_text = row["raw_text"]
-        sections_count = row["sections_count"]
         page_count = row["page_count"] or 1
 
         # Retrieve sections (page_start may be NULL for pre-migration data)

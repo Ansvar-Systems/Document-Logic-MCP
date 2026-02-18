@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, CallToolResult
 from .tools import (
     parse_document_tool, extract_document_tool, list_documents_tool,
     get_document_tool, delete_document_tool,
@@ -40,7 +40,7 @@ def create_server() -> Server:
                     "Returns: {doc_id, filename, sections_count, page_count, status, entities_preview}. "
                     "Use the returned doc_id for extract_document or get_document. "
                     "Do NOT call this on already-parsed documents — use list_documents to check first. "
-                    "On error: {error, error_type} — file_not_found, invalid_input (unsupported format), "
+                    "On error: {error, type} — file_not_found, invalid_input (unsupported format), "
                     "or invalid_input (file too large, max 50 MB configurable via MAX_FILE_SIZE_MB)."
                 ),
                 inputSchema={
@@ -75,7 +75,7 @@ def create_server() -> Server:
                     "overview, truths[], entities[], relationships[], synthesis? (only when analysis_context set)}. "
                     "After extraction, use query_documents for natural-language search across truths, "
                     "or get_document to retrieve all data for a specific document. "
-                    "On error: {error, error_type} — invalid_input if doc_id not found."
+                    "On error: {error, type} — invalid_input if doc_id not found."
                 ),
                 inputSchema={
                     "type": "object",
@@ -157,7 +157,7 @@ def create_server() -> Server:
                     "entities: [{entity_id, entity_name, entity_type, mention_count}], "
                     "relationships: [{relationship_id, entity_a, relationship_type, entity_b, "
                     "source_section, confidence}]. "
-                    "On error: {error, error_type} — invalid_input if doc_id not found."
+                    "On error: {error, type} — invalid_input if doc_id not found."
                 ),
                 inputSchema={
                     "type": "object",
@@ -187,7 +187,7 @@ def create_server() -> Server:
                     "This is irreversible. Use for data lifecycle management "
                     "or when a document should no longer be queryable. "
                     "Returns: {deleted, filename, status}. "
-                    "On error: {error, error_type} — e.g., invalid_input if doc_id not found."
+                    "On error: {error, type} — e.g., invalid_input if doc_id not found."
                 ),
                 inputSchema={
                     "type": "object",
@@ -278,7 +278,7 @@ def create_server() -> Server:
                     "sqlite: full database copy, queryable with SQL — largest but most flexible. "
                     "markdown: human-readable report with sections — suitable for review/sharing. "
                     "Returns: {exported_to, format}. "
-                    "On error: {error, error_type} — invalid_input for unknown format. "
+                    "On error: {error, type} — invalid_input for unknown format. "
                     "The output_path directory must exist and be writable by the server process."
                 ),
                 inputSchema={
@@ -358,21 +358,30 @@ def create_server() -> Server:
         try:
             return await _dispatch_tool(name, arguments)
         except FileNotFoundError as e:
-            return [TextContent(type="text", text=json.dumps({
-                "error": str(e),
-                "error_type": "file_not_found",
-            }))]
+            return CallToolResult(
+                content=[TextContent(type="text", text=json.dumps({
+                    "error": str(e),
+                    "type": "file_not_found",
+                }))],
+                isError=True,
+            )
         except (ValueError, KeyError, TypeError) as e:
-            return [TextContent(type="text", text=json.dumps({
-                "error": str(e),
-                "error_type": "invalid_input",
-            }))]
+            return CallToolResult(
+                content=[TextContent(type="text", text=json.dumps({
+                    "error": str(e),
+                    "type": "invalid_input",
+                }))],
+                isError=True,
+            )
         except Exception as e:
             logger.error(f"Tool {name} failed: {type(e).__name__}: {e}", exc_info=True)
-            return [TextContent(type="text", text=json.dumps({
-                "error": f"{type(e).__name__}: {e}",
-                "error_type": "internal_error",
-            }))]
+            return CallToolResult(
+                content=[TextContent(type="text", text=json.dumps({
+                    "error": f"{type(e).__name__}: {e}",
+                    "type": "internal_error",
+                }))],
+                isError=True,
+            )
 
     def _require_str(arguments: dict, key: str, max_length: int = 10000) -> str:
         """Validate a required string parameter."""

@@ -7,7 +7,7 @@ import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -196,10 +196,10 @@ class AssessmentExporter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         md = []
-        md.append(f"# Document Intelligence Assessment")
+        md.append("# Document Intelligence Assessment")
         md.append(f"\n**Exported:** {data['exported_at']}")
         md.append(f"\n**Assessment ID:** {data['assessment_id']}")
-        md.append(f"\n---\n")
+        md.append("\n---\n")
 
         # Documents
         md.append(f"## Documents Processed ({len(data['documents'])})\n")
@@ -240,7 +240,7 @@ class AssessmentExporter:
 
         # Metadata
         meta = data["extraction_metadata"]
-        md.append(f"## Extraction Metadata\n")
+        md.append("## Extraction Metadata\n")
         md.append(f"- **Model:** {meta['model_used']}")
         md.append(f"- **Date:** {meta['extraction_date']}")
         md.append(f"- **Documents:** {meta['documents_processed']}")

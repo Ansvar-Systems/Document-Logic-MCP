@@ -3,7 +3,7 @@
 import aiosqlite
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Union
+from typing import AsyncIterator, Union
 
 
 class Database:

@@ -2,8 +2,7 @@
 
 import json
 import pytest
-from pathlib import Path
-from document_logic_mcp.tools import parse_document_tool, extract_document_tool
+from document_logic_mcp.tools import parse_document_tool
 from document_logic_mcp.query import QueryEngine
 from document_logic_mcp.export import AssessmentExporter
 from document_logic_mcp.database import Database

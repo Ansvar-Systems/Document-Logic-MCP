@@ -1,8 +1,6 @@
 """Tests for input validation, security controls, and FTS5 search."""
 
-import os
 import pytest
-from pathlib import Path
 from unittest.mock import patch
 
 from document_logic_mcp.database import Database

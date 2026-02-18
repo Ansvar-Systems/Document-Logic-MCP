@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Security, Depends, Request, APIRouter
+from fastapi import FastAPI, HTTPException, Security, Depends, APIRouter
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 

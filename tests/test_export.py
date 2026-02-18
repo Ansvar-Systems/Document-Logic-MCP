@@ -2,7 +2,6 @@
 
 import pytest
 import json
-from pathlib import Path
 from document_logic_mcp.export import AssessmentExporter
 from document_logic_mcp.database import Database
 

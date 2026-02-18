@@ -1,7 +1,6 @@
 """Tests for MCP tools."""
 
 import pytest
-from pathlib import Path
 from document_logic_mcp.tools import parse_document_tool
 
 

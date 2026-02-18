@@ -9,8 +9,8 @@ from document_logic_mcp.parsers.pdf_parser import PDFParser
 from document_logic_mcp.parsers.docx_parser import (
     DOCXParser,
     _compute_body_font_size,
-    _detect_formatting_heading,
 )
+from document_logic_mcp.parsers.base import ParseResult
 
 
 # ---------------------------------------------------------------------------

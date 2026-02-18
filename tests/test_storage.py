@@ -4,7 +4,6 @@ import pytest
 from document_logic_mcp.storage import ExtractionStorage
 from document_logic_mcp.extraction.schemas import (
     ExtractedTruth,
-    ExtractedEntity,
     StatementType,
 )
 
