@@ -413,9 +413,9 @@ async def extract_document_tool(
     return result
 
 
-async def list_documents_tool(db_path: Path) -> Dict[str, Any]:
+async def list_documents_tool(db_path: Path, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     """
-    List all documents in the database with extraction status and counts.
+    List documents in the database with extraction status and counts.
 
     Returns a catalog of documents for agent discovery — lets agents
     know what's been parsed/extracted without fetching full data.
@@ -424,6 +424,10 @@ async def list_documents_tool(db_path: Path) -> Dict[str, Any]:
     await db.initialize()
 
     async with db.connection() as conn:
+        # Get total count
+        count_cursor = await conn.execute("SELECT COUNT(*) as cnt FROM documents")
+        total = (await count_cursor.fetchone())["cnt"]
+
         cursor = await conn.execute("""
             SELECT d.doc_id, d.filename, d.status, d.upload_date, d.sections_count,
                    COUNT(DISTINCT t.truth_id) as truths_count,
@@ -435,14 +439,15 @@ async def list_documents_tool(db_path: Path) -> Dict[str, Any]:
             LEFT JOIN relationships r ON d.doc_id = r.source_doc_id
             GROUP BY d.doc_id
             ORDER BY d.upload_date DESC
-        """)
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
         rows = await cursor.fetchall()
         documents = [dict(row) for row in rows]
 
-    return {"documents": documents, "count": len(documents)}
+    return {"documents": documents, "count": len(documents), "total": total}
 
 
-async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
+async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: bool = False) -> Dict[str, Any]:
     """
     Get full document details including all extracted data.
 
@@ -473,77 +478,87 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
             except (json.JSONDecodeError, TypeError):
                 result["metadata"] = {}
 
-        # Fetch truths
-        cursor = await conn.execute("""
-            SELECT
-                t.truth_id, t.statement, t.source_section,
-                t.source_page, t.source_paragraph, t.statement_type,
-                t.confidence, t.source_authority
-            FROM truths t
-            WHERE t.doc_id = ?
-        """, (doc_id,))
-        truth_rows = await cursor.fetchall()
+        # Always fetch counts (lightweight)
+        count_cursor = await conn.execute(
+            "SELECT COUNT(*) as cnt FROM truths WHERE doc_id = ?", (doc_id,)
+        )
+        result["truths_count"] = (await count_cursor.fetchone())["cnt"]
 
-        # Batch-fetch all truth-entity mappings (eliminates N+1 queries)
-        truth_ids = [row["truth_id"] for row in truth_rows]
-        entity_map: dict[str, list[str]] = {tid: [] for tid in truth_ids}
-        if truth_ids:
-            placeholders = ",".join("?" for _ in truth_ids)
-            entity_cursor = await conn.execute(f"""
-                SELECT te.truth_id, e.entity_name
-                FROM truth_entities te
-                JOIN entities e ON te.entity_id = e.entity_id
-                WHERE te.truth_id IN ({placeholders})
-            """, truth_ids)
-            for erow in await entity_cursor.fetchall():
-                entity_map[erow["truth_id"]].append(erow["entity_name"])
+        count_cursor = await conn.execute(
+            "SELECT COUNT(*) as cnt FROM entities WHERE doc_id = ?", (doc_id,)
+        )
+        result["entities_count"] = (await count_cursor.fetchone())["cnt"]
 
-        truths = []
-        for row in truth_rows:
-            truths.append({
-                "truth_id": row["truth_id"],
-                "statement": row["statement"],
-                "source_section": row["source_section"],
-                "source_page": row["source_page"],
-                "source_paragraph": row["source_paragraph"],
-                "statement_type": row["statement_type"],
-                "confidence": row["confidence"],
-                "source_authority": row["source_authority"],
-                "related_entities": entity_map.get(row["truth_id"], []),
-            })
+        count_cursor = await conn.execute(
+            "SELECT COUNT(*) as cnt FROM relationships WHERE source_doc_id = ?", (doc_id,)
+        )
+        result["relationships_count"] = (await count_cursor.fetchone())["cnt"]
 
-        # Fetch entities
-        cursor = await conn.execute("""
-            SELECT entity_id, entity_name, entity_type, mention_count
-            FROM entities
-            WHERE doc_id = ?
-        """, (doc_id,))
-        entity_rows = await cursor.fetchall()
-        entities_list = [dict(row) for row in entity_rows]
+        # Only fetch full data when requested (prevents context window explosion)
+        if include_extracted_data:
+            # Fetch truths
+            cursor = await conn.execute("""
+                SELECT
+                    t.truth_id, t.statement, t.source_section,
+                    t.source_page, t.source_paragraph, t.statement_type,
+                    t.confidence, t.source_authority
+                FROM truths t
+                WHERE t.doc_id = ?
+            """, (doc_id,))
+            truth_rows = await cursor.fetchall()
 
-        # Fetch relationships with entity name joins
-        cursor = await conn.execute("""
-            SELECT
-                r.relationship_id,
-                ea.entity_name as entity_a,
-                r.relationship_type,
-                eb.entity_name as entity_b,
-                r.source_section,
-                r.confidence
-            FROM relationships r
-            JOIN entities ea ON r.entity_a_id = ea.entity_id
-            JOIN entities eb ON r.entity_b_id = eb.entity_id
-            WHERE r.source_doc_id = ?
-        """, (doc_id,))
-        rel_rows = await cursor.fetchall()
-        relationships = [dict(row) for row in rel_rows]
+            # Batch-fetch all truth-entity mappings (eliminates N+1 queries)
+            truth_ids = [row["truth_id"] for row in truth_rows]
+            entity_map: dict[str, list[str]] = {tid: [] for tid in truth_ids}
+            if truth_ids:
+                placeholders = ",".join("?" for _ in truth_ids)
+                entity_cursor = await conn.execute(f"""
+                    SELECT te.truth_id, e.entity_name
+                    FROM truth_entities te
+                    JOIN entities e ON te.entity_id = e.entity_id
+                    WHERE te.truth_id IN ({placeholders})
+                """, truth_ids)
+                for erow in await entity_cursor.fetchall():
+                    entity_map[erow["truth_id"]].append(erow["entity_name"])
 
-    result["truths_count"] = len(truths)
-    result["entities_count"] = len(entities_list)
-    result["relationships_count"] = len(relationships)
-    result["truths"] = truths
-    result["entities"] = entities_list
-    result["relationships"] = relationships
+            result["truths"] = [
+                {
+                    "truth_id": row["truth_id"],
+                    "statement": row["statement"],
+                    "source_section": row["source_section"],
+                    "source_page": row["source_page"],
+                    "source_paragraph": row["source_paragraph"],
+                    "statement_type": row["statement_type"],
+                    "confidence": row["confidence"],
+                    "source_authority": row["source_authority"],
+                    "related_entities": entity_map.get(row["truth_id"], []),
+                }
+                for row in truth_rows
+            ]
+
+            # Fetch entities
+            cursor = await conn.execute("""
+                SELECT entity_id, entity_name, entity_type, mention_count
+                FROM entities
+                WHERE doc_id = ?
+            """, (doc_id,))
+            result["entities"] = [dict(row) for row in await cursor.fetchall()]
+
+            # Fetch relationships with entity name joins
+            cursor = await conn.execute("""
+                SELECT
+                    r.relationship_id,
+                    ea.entity_name as entity_a,
+                    r.relationship_type,
+                    eb.entity_name as entity_b,
+                    r.source_section,
+                    r.confidence
+                FROM relationships r
+                JOIN entities ea ON r.entity_a_id = ea.entity_id
+                JOIN entities eb ON r.entity_b_id = eb.entity_id
+                WHERE r.source_doc_id = ?
+            """, (doc_id,))
+            result["relationships"] = [dict(row) for row in await cursor.fetchall()]
 
     return result
 

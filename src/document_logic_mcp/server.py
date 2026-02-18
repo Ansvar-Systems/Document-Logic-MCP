@@ -9,7 +9,11 @@ from pathlib import Path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
-from .tools import parse_document_tool, extract_document_tool, list_documents_tool, get_document_tool, delete_document_tool
+from .tools import (
+    parse_document_tool, extract_document_tool, list_documents_tool,
+    get_document_tool, delete_document_tool,
+    resolve_technology_name_tool, suggest_terminology_addition_tool,
+)
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -109,36 +113,50 @@ def create_server() -> Server:
             Tool(
                 name="list_documents",
                 description=(
-                    "List all documents in the database with their extraction status and counts. "
+                    "List documents in the database with their extraction status and counts. "
                     "Use to discover available documents, check extraction status before calling "
                     "extract_document, or find doc_ids for get_document/query_documents/delete_document. "
                     "Returns: {documents: [{doc_id, filename, status, upload_date, sections_count, "
-                    "truths_count, entities_count, relationships_count}], count: N}. "
+                    "truths_count, entities_count, relationships_count}], count: N, total: N}. "
                     "Status values: 'parsed' (ready for extraction), 'extracting' (in progress), "
                     "'completed' (extraction done, truths available for querying). "
-                    "Returns {documents: [], count: 0} if no documents have been parsed yet. "
-                    "No parameters required — always returns all documents."
+                    "Returns {documents: [], count: 0, total: 0} if no documents have been parsed yet."
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum documents to return (1-500). Default: 100.",
+                            "minimum": 1,
+                            "maximum": 500,
+                            "default": 100,
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Number of documents to skip (for pagination). Default: 0.",
+                            "minimum": 0,
+                            "default": 0,
+                        },
+                    },
                 },
             ),
             Tool(
                 name="get_document",
                 description=(
-                    "Get full details for a single document including ALL extracted data. "
-                    "WARNING: Response can be large for documents with many truths — prefer "
-                    "query_documents for targeted searches across documents. "
-                    "Use this to: retrieve complete extraction results, check extraction status, "
-                    "or get all entities/relationships for a specific document. "
+                    "Get details for a single document. By default returns metadata + counts only "
+                    "(lightweight). Set include_extracted_data=true to also return all truths, "
+                    "entities, and relationships (can be large — prefer query_documents for targeted search). "
+                    "Use this to: check extraction status, get document metadata, or retrieve full "
+                    "extraction results for a specific document. "
                     "Returns: {doc_id, filename, status, upload_date, sections_count, metadata, "
-                    "truths_count, entities_count, relationships_count, "
+                    "truths_count, entities_count, relationships_count}. "
+                    "With include_extracted_data=true, also includes: "
                     "truths: [{truth_id, statement, source_section, source_page, source_paragraph, "
                     "statement_type, confidence, source_authority, related_entities}], "
                     "entities: [{entity_id, entity_name, entity_type, mention_count}], "
                     "relationships: [{relationship_id, entity_a, relationship_type, entity_b, "
-                    "source_section, confidence}]}. "
+                    "source_section, confidence}]. "
                     "On error: {error, error_type} — invalid_input if doc_id not found."
                 ),
                 inputSchema={
@@ -147,7 +165,16 @@ def create_server() -> Server:
                         "doc_id": {
                             "type": "string",
                             "description": "Document ID (from parse_document or list_documents)",
-                        }
+                        },
+                        "include_extracted_data": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, include full truths/entities/relationships arrays. "
+                                "Default false (metadata + counts only). Set true only when you "
+                                "need the complete extraction output."
+                            ),
+                            "default": False,
+                        },
                     },
                     "required": ["doc_id"],
                 },
@@ -270,6 +297,59 @@ def create_server() -> Server:
                     "required": ["format", "output_path"],
                 },
             ),
+            Tool(
+                name="resolve_technology_name",
+                description=(
+                    "Resolve a raw technology string to its canonical name using the "
+                    "built-in technology terminology resource. Deterministic (no LLM). "
+                    "Handles: aliases ('ELK Stack' → 'Elasticsearch (Elastic Stack)'), "
+                    "abbreviations ('PG' → 'PostgreSQL'), version stripping ('PostgreSQL 15.3' → "
+                    "'PostgreSQL', version '15.3'), typo correction (fuzzy, 0.85 threshold), "
+                    "renames ('Azure AD' → 'Microsoft Entra ID'). "
+                    "Returns: {canonical_name (null if no match), original, version, category, "
+                    "match_method ('exact'|'fuzzy'|null), confidence (0.0-1.0), disambiguation_note}. "
+                    "Use before storing technology names to ensure consistency across documents."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "raw_name": {
+                            "type": "string",
+                            "description": "Raw technology string from a source document (e.g., 'ELK Stack', 'PostgreSQL 15.3', 'Azure AD')",
+                        }
+                    },
+                    "required": ["raw_name"],
+                },
+            ),
+            Tool(
+                name="suggest_terminology_addition",
+                description=(
+                    "Queue a terminology addition suggestion for human review. "
+                    "Called when an agent encounters a technology name not in the terminology table "
+                    "and resolves it via semantic dedup. Persists the suggestion in the database — "
+                    "does NOT auto-add to the terminology file. "
+                    "Returns: {canonical_name, aliases, category, persisted (bool), suggestion_id}. "
+                    "Only use this after resolve_technology_name returns null canonical_name."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "raw_string": {
+                            "type": "string",
+                            "description": "The unresolved technology string from the source document",
+                        },
+                        "resolved_canonical": {
+                            "type": "string",
+                            "description": "What the agent resolved it to via semantic dedup (optional)",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "A snippet from the source document providing usage context (optional)",
+                        },
+                    },
+                    "required": ["raw_string"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -331,14 +411,25 @@ def create_server() -> Server:
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "list_documents":
-            result = await list_documents_tool(db_path=DEFAULT_DB_PATH)
+            limit = arguments.get("limit", 100)
+            if not isinstance(limit, int) or limit < 1:
+                limit = 100
+            limit = min(limit, 500)
+            offset = arguments.get("offset", 0)
+            if not isinstance(offset, int) or offset < 0:
+                offset = 0
+            result = await list_documents_tool(
+                db_path=DEFAULT_DB_PATH, limit=limit, offset=offset,
+            )
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "get_document":
             doc_id = _require_str(arguments, "doc_id", max_length=200)
+            include_extracted = bool(arguments.get("include_extracted_data", False))
             result = await get_document_tool(
                 doc_id=doc_id,
                 db_path=DEFAULT_DB_PATH,
+                include_extracted_data=include_extracted,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 
@@ -399,13 +490,19 @@ def create_server() -> Server:
         elif name == "export_assessment":
             format_type = _require_str(arguments, "format", max_length=20)
             output_path_str = _require_str(arguments, "output_path")
+
+            # Path traversal protection for export output
+            from .tools import ALLOWED_DOC_DIRS
+            output_path = Path(output_path_str).resolve()
+            if ALLOWED_DOC_DIRS:
+                if not any(output_path == d or output_path.is_relative_to(d) for d in ALLOWED_DOC_DIRS):
+                    raise ValueError("Access denied: export path is outside allowed directories")
+
             from .export import AssessmentExporter
 
             db = Database(DEFAULT_DB_PATH)
             await db.initialize()
             exporter = AssessmentExporter(db)
-
-            output_path = Path(output_path_str)
 
             if format_type == "json":
                 result_path = await exporter.export_json(output_path)
@@ -420,6 +517,21 @@ def create_server() -> Server:
                 type="text",
                 text=json.dumps({"exported_to": str(result_path), "format": format_type}),
             )]
+
+        elif name == "resolve_technology_name":
+            raw_name = _require_str(arguments, "raw_name", max_length=500)
+            result = await resolve_technology_name_tool(raw_name=raw_name)
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        elif name == "suggest_terminology_addition":
+            raw_string = _require_str(arguments, "raw_string", max_length=500)
+            result = await suggest_terminology_addition_tool(
+                raw_string=raw_string,
+                resolved_canonical=arguments.get("resolved_canonical"),
+                context=arguments.get("context"),
+                db_path=DEFAULT_DB_PATH,
+            )
+            return [TextContent(type="text", text=json.dumps(result))]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

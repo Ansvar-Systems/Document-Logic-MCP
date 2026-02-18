@@ -246,10 +246,12 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
 
 # List documents endpoint
 @app.get("/documents")
-async def list_documents() -> Dict[str, Any]:
-    """List all documents with extraction status and counts."""
+async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+    """List documents with extraction status and counts. Supports pagination via ?limit=&offset=."""
     try:
-        result = await list_documents_tool(db_path=db_path)
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        result = await list_documents_tool(db_path=db_path, limit=limit, offset=offset)
         return result
     except Exception as e:
         logger.error(f"List documents failed: {e}")
@@ -258,10 +260,10 @@ async def list_documents() -> Dict[str, Any]:
 
 # Get document endpoint
 @app.get("/documents/{doc_id}")
-async def get_document(doc_id: str) -> Dict[str, Any]:
-    """Get full document details including all extracted data."""
+async def get_document(doc_id: str, include_extracted_data: bool = False) -> Dict[str, Any]:
+    """Get document details. Pass ?include_extracted_data=true for full truths/entities/relationships."""
     try:
-        result = await get_document_tool(doc_id=doc_id, db_path=db_path)
+        result = await get_document_tool(doc_id=doc_id, db_path=db_path, include_extracted_data=include_extracted_data)
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

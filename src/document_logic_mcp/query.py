@@ -9,7 +9,7 @@ from .embeddings import EmbeddingService, compute_similarities
 logger = logging.getLogger(__name__)
 
 # Characters with special meaning in FTS5 query syntax
-_FTS5_SPECIAL = re.compile(r'["\'\*\(\)\-\+\:\^\~]')
+_FTS5_SPECIAL = re.compile(r'["\'\*\(\)\-\+\:\^\~\;\{\}\[\]]')
 
 
 def _sanitize_fts5_query(raw: str) -> str:
