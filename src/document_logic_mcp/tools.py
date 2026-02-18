@@ -96,9 +96,12 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
 
     async with db.connection() as conn:
         # Store document metadata
+        import json
+        metadata_json = json.dumps(parse_result.metadata) if parse_result.metadata else None
+
         await conn.execute("""
-            INSERT INTO documents (doc_id, filename, upload_date, sections_count, page_count, status, raw_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (doc_id, filename, upload_date, sections_count, page_count, status, raw_text, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             doc_id,
             parse_result.filename,
@@ -106,7 +109,8 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
             len(parse_result.sections),
             parse_result.page_count,
             "parsed",
-            parse_result.raw_text
+            parse_result.raw_text,
+            metadata_json
         ))
 
         # Store sections
@@ -451,7 +455,7 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
     async with db.connection() as conn:
         # Fetch document metadata
         cursor = await conn.execute(
-            "SELECT doc_id, filename, status, upload_date, sections_count FROM documents WHERE doc_id = ?",
+            "SELECT doc_id, filename, status, upload_date, sections_count, raw_text, metadata FROM documents WHERE doc_id = ?",
             (doc_id,)
         )
         doc_row = await cursor.fetchone()
@@ -461,7 +465,15 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
 
         result = dict(doc_row)
 
-        # Fetch truths with related entities
+        # Parse metadata JSON
+        import json
+        if result.get("metadata"):
+            try:
+                result["metadata"] = json.loads(result["metadata"])
+            except (json.JSONDecodeError, TypeError):
+                result["metadata"] = {}
+
+        # Fetch truths
         cursor = await conn.execute("""
             SELECT
                 t.truth_id, t.statement, t.source_section,
@@ -472,16 +484,22 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
         """, (doc_id,))
         truth_rows = await cursor.fetchall()
 
-        truths = []
-        for row in truth_rows:
-            entity_cursor = await conn.execute("""
-                SELECT e.entity_name
+        # Batch-fetch all truth-entity mappings (eliminates N+1 queries)
+        truth_ids = [row["truth_id"] for row in truth_rows]
+        entity_map: dict[str, list[str]] = {tid: [] for tid in truth_ids}
+        if truth_ids:
+            placeholders = ",".join("?" for _ in truth_ids)
+            entity_cursor = await conn.execute(f"""
+                SELECT te.truth_id, e.entity_name
                 FROM truth_entities te
                 JOIN entities e ON te.entity_id = e.entity_id
-                WHERE te.truth_id = ?
-            """, (row["truth_id"],))
-            entities = [e["entity_name"] for e in await entity_cursor.fetchall()]
+                WHERE te.truth_id IN ({placeholders})
+            """, truth_ids)
+            for erow in await entity_cursor.fetchall():
+                entity_map[erow["truth_id"]].append(erow["entity_name"])
 
+        truths = []
+        for row in truth_rows:
             truths.append({
                 "truth_id": row["truth_id"],
                 "statement": row["statement"],
@@ -491,7 +509,7 @@ async def get_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
                 "statement_type": row["statement_type"],
                 "confidence": row["confidence"],
                 "source_authority": row["source_authority"],
-                "related_entities": entities,
+                "related_entities": entity_map.get(row["truth_id"], []),
             })
 
         # Fetch entities

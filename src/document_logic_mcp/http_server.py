@@ -69,8 +69,38 @@ _health_router = APIRouter(dependencies=[])
 
 @_health_router.get("/health")
 async def health_check():
-    """Health check endpoint (no authentication required)."""
-    return {"status": "ok", "server": "document-logic-mcp"}
+    """Health check endpoint (no authentication required).
+
+    Returns structured status with DB connectivity, document counts,
+    and version info for orchestrator consumption.
+    """
+    import aiosqlite
+
+    status = "ok"
+    details: Dict[str, Any] = {
+        "server": "document-logic-mcp",
+        "version": "0.1.0",
+    }
+
+    # Check DB connectivity and report stats
+    if db_path and db_path.exists():
+        try:
+            async with aiosqlite.connect(str(db_path)) as conn:
+                conn.row_factory = aiosqlite.Row
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) as cnt FROM documents"
+                )
+                row = await cursor.fetchone()
+                details["documents_count"] = row["cnt"] if row else 0
+                details["db_status"] = "connected"
+        except Exception as e:
+            status = "degraded"
+            details["db_status"] = f"error: {type(e).__name__}"
+    else:
+        details["db_status"] = "not_initialized"
+
+    details["status"] = status
+    return details
 
 
 app.include_router(_health_router)
@@ -104,6 +134,7 @@ class ExtractDocumentRequest(BaseModel):
 class QueryDocumentsRequest(BaseModel):
     query: str = Field(..., description="Natural language query")
     doc_ids: list[str] | None = Field(None, description="Optional: limit to specific documents")
+    limit: int = Field(20, ge=1, le=100, description="Maximum results to return (1-100)")
 
 
 class EntityAliasesRequest(BaseModel):
@@ -270,7 +301,7 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
             embedding_service = None
 
         query_engine = QueryEngine(db, embedding_service=embedding_service)
-        results = await query_engine.query(request.query, doc_ids=request.doc_ids)
+        results = await query_engine.query(request.query, doc_ids=request.doc_ids, top_k=request.limit)
         return {"results": results, "count": len(results)}
     except Exception as e:
         logger.error(f"Query failed: {e}")

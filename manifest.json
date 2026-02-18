@@ -27,7 +27,16 @@
       }
     }
   },
-  "tools": [],
+  "tools": [
+    "parse_document",
+    "extract_document",
+    "list_documents",
+    "get_document",
+    "delete_document",
+    "query_documents",
+    "get_entity_aliases",
+    "export_assessment"
+  ],
   "compatibility": {
     "platforms": ["darwin", "win32", "linux"],
     "runtimes": {

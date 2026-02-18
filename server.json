@@ -1,0 +1,48 @@
+{
+  "name": "document-logic-mcp",
+  "display_name": "Document Logic MCP",
+  "description": "Structured document intelligence extraction for security assessments and third-party risk management. Extracts truths, entities, and relationships from PDF/DOCX/JSON with precise citations. Every fact traced to page, section, and paragraph.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ansvar Systems",
+    "url": "https://ansvar.eu"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Ansvar-Systems/Document-Logic-MCP",
+  "tools": [
+    "parse_document",
+    "extract_document",
+    "list_documents",
+    "get_document",
+    "delete_document",
+    "query_documents",
+    "get_entity_aliases",
+    "export_assessment"
+  ],
+  "transport": {
+    "stdio": {
+      "command": "python3",
+      "args": ["run.py"],
+      "env": {
+        "PYTHONPATH": "src:lib"
+      }
+    },
+    "http": {
+      "url": "${DOCUMENT_LOGIC_MCP_URL:-http://localhost:3000}"
+    }
+  },
+  "categories": [
+    "document-processing",
+    "security",
+    "compliance"
+  ],
+  "tags": [
+    "document-extraction",
+    "pdf",
+    "docx",
+    "tprm",
+    "security-assessment",
+    "citations",
+    "entity-extraction"
+  ]
+}

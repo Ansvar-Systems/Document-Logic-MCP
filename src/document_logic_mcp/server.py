@@ -29,12 +29,15 @@ def create_server() -> Server:
             Tool(
                 name="parse_document",
                 description=(
-                    "Parse a document (PDF, DOCX, or JSON) and extract structure. "
-                    "Fast (seconds), deterministic. This is always the FIRST step — "
+                    "Parse a document (PDF, DOCX, or JSON) and extract its structure into sections. "
+                    "Fast (seconds), deterministic — no LLM involved. This is always the FIRST step; "
                     "call this before extract_document. "
+                    "Workflow: parse_document → extract_document → query_documents. "
                     "Returns: {doc_id, filename, sections_count, page_count, status, entities_preview}. "
-                    "Use the returned doc_id for extract_document. "
-                    "On error: {error, error_type} — e.g., file_not_found or invalid_input for unsupported format."
+                    "Use the returned doc_id for extract_document or get_document. "
+                    "Do NOT call this on already-parsed documents — use list_documents to check first. "
+                    "On error: {error, error_type} — file_not_found, invalid_input (unsupported format), "
+                    "or invalid_input (file too large, max 50 MB configurable via MAX_FILE_SIZE_MB)."
                 ),
                 inputSchema={
                     "type": "object",
@@ -43,7 +46,9 @@ def create_server() -> Server:
                             "type": "string",
                             "description": (
                                 "Absolute path to the document file. "
-                                "Supported formats: .pdf, .docx, .json"
+                                "Supported formats: .pdf (text-based, not scanned images), "
+                                ".docx (not .doc), .json. "
+                                "Path must be accessible to the server process."
                             ),
                         }
                     },
@@ -55,14 +60,18 @@ def create_server() -> Server:
                 description=(
                     "Extract truths, entities, and relationships from a parsed document using LLM. "
                     "SLOW (1-5 min for <10 sections, 10-30+ min for large docs) — blocks until complete. "
-                    "Requires parse_document first. "
+                    "Requires parse_document first (status must be 'parsed'). "
+                    "Do NOT call on documents with status 'completed' — extraction was already done; "
+                    "use get_document to retrieve results instead. "
                     "Pass 1: document overview. Pass 2: per-section truths/entities/relationships. "
                     "Without analysis_context: returns truths/entities/relationships only (no 'synthesis' key). "
                     "With analysis_context: also runs Pass 3 cross-section synthesis, adding a 'synthesis' key "
                     "with component_registry, trust_boundaries, implicit_negatives, ambiguities. "
                     "Returns: {doc_id, status, truths_extracted, entities_found, relationships_found, "
                     "overview, truths[], entities[], relationships[], synthesis? (only when analysis_context set)}. "
-                    "On error: {error, error_type}."
+                    "After extraction, use query_documents for natural-language search across truths, "
+                    "or get_document to retrieve all data for a specific document. "
+                    "On error: {error, error_type} — invalid_input if doc_id not found."
                 ),
                 inputSchema={
                     "type": "object",
@@ -101,12 +110,14 @@ def create_server() -> Server:
                 name="list_documents",
                 description=(
                     "List all documents in the database with their extraction status and counts. "
-                    "Use to discover what documents exist, check if extraction is complete, "
-                    "or find doc_ids for use with get_document or query_documents. "
+                    "Use to discover available documents, check extraction status before calling "
+                    "extract_document, or find doc_ids for get_document/query_documents/delete_document. "
                     "Returns: {documents: [{doc_id, filename, status, upload_date, sections_count, "
                     "truths_count, entities_count, relationships_count}], count: N}. "
                     "Status values: 'parsed' (ready for extraction), 'extracting' (in progress), "
-                    "'completed' (extraction done)."
+                    "'completed' (extraction done, truths available for querying). "
+                    "Returns {documents: [], count: 0} if no documents have been parsed yet. "
+                    "No parameters required — always returns all documents."
                 ),
                 inputSchema={
                     "type": "object",
@@ -116,17 +127,19 @@ def create_server() -> Server:
             Tool(
                 name="get_document",
                 description=(
-                    "Get full details for a single document including all extracted data. "
-                    "Use to check extraction status, retrieve truths/entities/relationships, "
-                    "or inspect what was extracted from a specific document. "
-                    "Returns: {doc_id, filename, status, upload_date, sections_count, "
+                    "Get full details for a single document including ALL extracted data. "
+                    "WARNING: Response can be large for documents with many truths — prefer "
+                    "query_documents for targeted searches across documents. "
+                    "Use this to: retrieve complete extraction results, check extraction status, "
+                    "or get all entities/relationships for a specific document. "
+                    "Returns: {doc_id, filename, status, upload_date, sections_count, metadata, "
                     "truths_count, entities_count, relationships_count, "
                     "truths: [{truth_id, statement, source_section, source_page, source_paragraph, "
                     "statement_type, confidence, source_authority, related_entities}], "
                     "entities: [{entity_id, entity_name, entity_type, mention_count}], "
                     "relationships: [{relationship_id, entity_a, relationship_type, entity_b, "
                     "source_section, confidence}]}. "
-                    "On error: {error, error_type} — e.g., invalid_input if doc_id not found."
+                    "On error: {error, error_type} — invalid_input if doc_id not found."
                 ),
                 inputSchema={
                     "type": "object",
@@ -163,14 +176,18 @@ def create_server() -> Server:
             Tool(
                 name="query_documents",
                 description=(
-                    "Query extracted truths using natural language. Uses semantic search "
-                    "(embeddings) with keyword fallback. Returns up to 20 results sorted by "
-                    "relevance, each with full citations. "
-                    "Optionally scope to specific documents using doc_ids. "
+                    "Search extracted truths using natural language. This is the primary tool "
+                    "for finding specific information across all parsed documents. "
+                    "Uses semantic search (embeddings) with automatic FTS5/keyword fallback. "
+                    "Requires at least one document to have been extracted first (status 'completed'). "
+                    "Returns up to 'limit' results sorted by relevance, each with full citations "
+                    "(document, section, page, paragraph). "
+                    "Optionally scope to specific documents using doc_ids (from list_documents). "
                     "Returns: {results: [{truth_id, statement, similarity (float or null if keyword "
                     "fallback), source: {document, section, page, paragraph}, document_date, "
                     "statement_type, confidence, source_authority, related_entities}], count: N}. "
-                    "Returns {results: [], count: 0} if no truths extracted yet."
+                    "Returns {results: [], count: 0} if no matching truths found or no extractions exist. "
+                    "For entity resolution, combine with get_entity_aliases."
                 ),
                 inputSchema={
                     "type": "object",
@@ -190,6 +207,13 @@ def create_server() -> Server:
                                 "Get doc_ids from list_documents or parse_document."
                             ),
                         },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results to return (1-100). Default: 20.",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 20,
+                        },
                     },
                     "required": ["query"],
                 },
@@ -200,9 +224,12 @@ def create_server() -> Server:
                     "Find potential aliases for a named entity (populated during extraction). "
                     "Use when consolidating entities across documents or resolving ambiguous "
                     "references (e.g., is 'CRM system' the same as 'Salesforce'?). "
+                    "Entity names must match exactly — get valid names from get_document entities[] "
+                    "or query_documents related_entities[]. "
                     "Returns: {entity, potential_aliases: [{entity, confidence, evidence}], "
                     "definitely_not: [{entity, evidence}]}. "
-                    "Returns empty arrays if entity not found or has no extracted aliases."
+                    "Returns empty arrays if entity not found or has no extracted aliases. "
+                    "This is NOT a search tool — use query_documents for natural language search."
                 ),
                 inputSchema={
                     "type": "object",
@@ -219,10 +246,13 @@ def create_server() -> Server:
                 name="export_assessment",
                 description=(
                     "Export all extracted data as a deliverable file. "
-                    "json: machine-readable, includes all truths/entities/relationships. "
-                    "sqlite: full database copy, queryable with SQL. "
-                    "markdown: human-readable report with sections. "
-                    "Returns: {exported_to, format}."
+                    "Use after extraction is complete to produce output for downstream consumption. "
+                    "json: machine-readable, includes all truths/entities/relationships across all documents. "
+                    "sqlite: full database copy, queryable with SQL — largest but most flexible. "
+                    "markdown: human-readable report with sections — suitable for review/sharing. "
+                    "Returns: {exported_to, format}. "
+                    "On error: {error, error_type} — invalid_input for unknown format. "
+                    "The output_path directory must exist and be writable by the server process."
                 ),
                 inputSchema={
                     "type": "object",
@@ -230,11 +260,11 @@ def create_server() -> Server:
                         "format": {
                             "type": "string",
                             "enum": ["json", "sqlite", "markdown"],
-                            "description": "Export format",
+                            "description": "Export format: 'json' (machine-readable), 'sqlite' (SQL-queryable), 'markdown' (human-readable)",
                         },
                         "output_path": {
                             "type": "string",
-                            "description": "Absolute path to save the export file",
+                            "description": "Absolute path to save the export file (directory must exist)",
                         },
                     },
                     "required": ["format", "output_path"],
@@ -252,7 +282,7 @@ def create_server() -> Server:
                 "error": str(e),
                 "error_type": "file_not_found",
             }))]
-        except ValueError as e:
+        except (ValueError, KeyError, TypeError) as e:
             return [TextContent(type="text", text=json.dumps({
                 "error": str(e),
                 "error_type": "invalid_input",
@@ -264,21 +294,39 @@ def create_server() -> Server:
                 "error_type": "internal_error",
             }))]
 
+    def _require_str(arguments: dict, key: str, max_length: int = 10000) -> str:
+        """Validate a required string parameter."""
+        val = arguments.get(key)
+        if not val or not isinstance(val, str) or not val.strip():
+            raise ValueError(f"'{key}' is required and must be a non-empty string")
+        val = val.strip()
+        if len(val) > max_length:
+            raise ValueError(f"'{key}' exceeds maximum length of {max_length} characters")
+        return val
+
     async def _dispatch_tool(name: str, arguments: dict):
         """Route tool calls to implementations."""
         if name == "parse_document":
+            file_path = _require_str(arguments, "file_path")
             result = await parse_document_tool(
-                file_path=arguments["file_path"],
+                file_path=file_path,
                 db_path=DEFAULT_DB_PATH,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "extract_document":
+            doc_id = _require_str(arguments, "doc_id", max_length=200)
+            analysis_context = arguments.get("analysis_context")
+            if analysis_context and analysis_context not in ("stride_threat_modeling", "tprm_vendor_assessment"):
+                raise ValueError(
+                    f"Invalid analysis_context '{analysis_context}'. "
+                    "Must be 'stride_threat_modeling' or 'tprm_vendor_assessment'."
+                )
             result = await extract_document_tool(
-                doc_id=arguments["doc_id"],
+                doc_id=doc_id,
                 db_path=DEFAULT_DB_PATH,
                 extraction_model=arguments.get("extraction_model"),
-                analysis_context=arguments.get("analysis_context"),
+                analysis_context=analysis_context,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 
@@ -287,20 +335,23 @@ def create_server() -> Server:
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "get_document":
+            doc_id = _require_str(arguments, "doc_id", max_length=200)
             result = await get_document_tool(
-                doc_id=arguments["doc_id"],
+                doc_id=doc_id,
                 db_path=DEFAULT_DB_PATH,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "delete_document":
+            doc_id = _require_str(arguments, "doc_id", max_length=200)
             result = await delete_document_tool(
-                doc_id=arguments["doc_id"],
+                doc_id=doc_id,
                 db_path=DEFAULT_DB_PATH,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "query_documents":
+            query = _require_str(arguments, "query")
             from .query import QueryEngine
             from .embeddings import EmbeddingService
 
@@ -312,10 +363,16 @@ def create_server() -> Server:
             except ImportError:
                 embedding_service = None
 
+            limit = arguments.get("limit", 20)
+            if not isinstance(limit, int) or limit < 1:
+                limit = 20
+            limit = min(limit, 100)
+
             query_engine = QueryEngine(db, embedding_service=embedding_service)
             results = await query_engine.query(
-                arguments["query"],
+                query,
                 doc_ids=arguments.get("doc_ids"),
+                top_k=limit,
             )
             return [TextContent(type="text", text=json.dumps({
                 "results": results,
@@ -323,6 +380,7 @@ def create_server() -> Server:
             }))]
 
         elif name == "get_entity_aliases":
+            entity_name = _require_str(arguments, "entity_name", max_length=500)
             from .query import QueryEngine
             from .embeddings import EmbeddingService
 
@@ -335,18 +393,19 @@ def create_server() -> Server:
                 embedding_service = None
 
             query_engine = QueryEngine(db, embedding_service=embedding_service)
-            result = await query_engine.get_entity_aliases(arguments["entity_name"])
+            result = await query_engine.get_entity_aliases(entity_name)
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "export_assessment":
+            format_type = _require_str(arguments, "format", max_length=20)
+            output_path_str = _require_str(arguments, "output_path")
             from .export import AssessmentExporter
 
             db = Database(DEFAULT_DB_PATH)
             await db.initialize()
             exporter = AssessmentExporter(db)
 
-            format_type = arguments["format"]
-            output_path = Path(arguments["output_path"])
+            output_path = Path(output_path_str)
 
             if format_type == "json":
                 result_path = await exporter.export_json(output_path)

@@ -16,12 +16,14 @@ async def test_database_initialization(tmp_path: Path) -> None:
 
     await db.initialize()
 
-    # Verify all tables exist
+    # Verify all tables exist (excluding FTS5 internal tables like truths_fts_*)
     async with aiosqlite.connect(str(db_path)) as conn:
         cursor = await conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
-        tables = [row[0] for row in await cursor.fetchall()]
+        all_tables = [row[0] for row in await cursor.fetchall()]
+        # Filter out FTS5 internal shadow tables (suffixed with _config, _data, _docsize, _idx)
+        tables = [t for t in all_tables if not any(t.endswith(s) for s in ("_config", "_data", "_docsize", "_idx"))]
 
     expected_tables = [
         "documents",
@@ -31,6 +33,7 @@ async def test_database_initialization(tmp_path: Path) -> None:
         "sections",
         "truth_entities",
         "truths",
+        "truths_fts",
     ]
 
     assert tables == expected_tables, f"Expected {expected_tables}, got {tables}"

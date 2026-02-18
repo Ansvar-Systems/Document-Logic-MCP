@@ -14,8 +14,8 @@ WORKDIR /app
 COPY src/ /app/src/
 COPY pyproject.toml /app/
 
-# Install package with dev dependencies
-RUN pip install --no-cache-dir -e ".[dev]"
+# Install package (production only — no dev dependencies in container)
+RUN pip install --no-cache-dir -e .
 
 # Create non-root user and data directory
 RUN useradd -m -u 1000 appuser \
@@ -26,6 +26,10 @@ USER appuser
 
 # Expose port
 EXPOSE 3000
+
+# Health check — allows Docker/orchestrators to detect unhealthy containers
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')" || exit 1
 
 # Run HTTP server
 CMD ["python", "-m", "document_logic_mcp", "--http"]

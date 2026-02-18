@@ -3,24 +3,28 @@
 import aiosqlite
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Union
 
 
 class Database:
     """SQLite database manager for Document Logic MCP."""
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: Union[str, Path]) -> None:
         """Initialize database connection.
 
         Args:
             db_path: Path to SQLite database file
         """
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = str(db_path)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     async def initialize(self) -> None:
         """Create database schema with all tables and indexes."""
         async with aiosqlite.connect(self.db_path) as db:
+            # Use DELETE journal mode for serverless/container compatibility
+            # (WAL creates sidecar files that break in read-only or ephemeral filesystems)
+            await db.execute("PRAGMA journal_mode = DELETE")
+            await db.execute("PRAGMA foreign_keys = ON")
             # Documents table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
@@ -31,9 +35,16 @@ class Database:
                     sections_count INTEGER NOT NULL,
                     page_count INTEGER DEFAULT 1,
                     status TEXT NOT NULL,
-                    raw_text TEXT
+                    raw_text TEXT,
+                    metadata TEXT
                 )
             """)
+
+            # Add metadata column if it doesn't exist (migration for existing databases)
+            try:
+                await db.execute("ALTER TABLE documents ADD COLUMN metadata TEXT")
+            except aiosqlite.OperationalError:
+                pass  # Column already exists
 
             # Sections table
             await db.execute("""
@@ -149,6 +160,48 @@ class Database:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sections_doc_id ON sections(doc_id)"
             )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relationships_doc_id ON relationships(source_doc_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_truth_entities_truth ON truth_entities(truth_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_truth_entities_entity ON truth_entities(entity_id)"
+            )
+
+            # FTS5 virtual table for full-text search on truths
+            await db.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS truths_fts USING fts5(
+                    truth_id UNINDEXED,
+                    statement,
+                    source_section,
+                    content=truths,
+                    content_rowid=rowid
+                )
+            """)
+
+            # FTS5 triggers to keep the index in sync with the truths table
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS truths_fts_insert AFTER INSERT ON truths BEGIN
+                    INSERT INTO truths_fts(rowid, truth_id, statement, source_section)
+                    VALUES (new.rowid, new.truth_id, new.statement, new.source_section);
+                END
+            """)
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS truths_fts_delete AFTER DELETE ON truths BEGIN
+                    INSERT INTO truths_fts(truths_fts, rowid, truth_id, statement, source_section)
+                    VALUES ('delete', old.rowid, old.truth_id, old.statement, old.source_section);
+                END
+            """)
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS truths_fts_update AFTER UPDATE ON truths BEGIN
+                    INSERT INTO truths_fts(truths_fts, rowid, truth_id, statement, source_section)
+                    VALUES ('delete', old.rowid, old.truth_id, old.statement, old.source_section);
+                    INSERT INTO truths_fts(rowid, truth_id, statement, source_section)
+                    VALUES (new.rowid, new.truth_id, new.statement, new.source_section);
+                END
+            """)
 
             await db.commit()
 

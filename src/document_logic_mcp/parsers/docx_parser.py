@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 from docx import Document
 from .base import BaseParser, ParseResult, Section
+from .docx_table_converter import get_table_paragraph_positions, table_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,26 @@ class DOCXParser(BaseParser):
         page_map = _build_page_map(doc)
         has_page_breaks = len(page_map) > 0
 
+        # Extract tables and their positions for insertion into text flow
+        table_positions = get_table_paragraph_positions(doc)
+        table_markdowns = []
+        for table in doc.tables:
+            markdown = table_to_markdown(table)
+            if markdown:
+                table_markdowns.append(markdown)
+
+        # Build mapping of paragraph_index -> table_markdown
+        table_map = {}
+        for idx, pos in enumerate(table_positions):
+            if idx < len(table_markdowns):
+                table_map[pos] = table_markdowns[idx]
+
+        if table_markdowns:
+            logger.info(
+                "Extracted %d tables from document as Markdown",
+                len(table_markdowns)
+            )
+
         sections = []
         raw_text = []
         current_section_title = None
@@ -285,8 +306,15 @@ class DOCXParser(BaseParser):
         paragraph_index = 0
 
         for para in doc.paragraphs:
+            # Check if there's a table at current paragraph position
+            if paragraph_index in table_map:
+                table_md = table_map[paragraph_index]
+                raw_text.append(table_md)
+                current_section_content.append(table_md)
+
             text = para.text.strip()
             if not text:
+                paragraph_index += 1
                 continue
 
             raw_text.append(text)
@@ -317,6 +345,12 @@ class DOCXParser(BaseParser):
                 current_section_content.append(text)
 
             paragraph_index += 1
+
+        # Check for any remaining tables after the last paragraph
+        if paragraph_index in table_map:
+            table_md = table_map[paragraph_index]
+            raw_text.append(table_md)
+            current_section_content.append(table_md)
 
         # Save last section
         if current_section_title:
@@ -357,6 +391,7 @@ class DOCXParser(BaseParser):
             metadata={
                 "parser": "python-docx",
                 "paragraph_count": len(doc.paragraphs),
+                "table_count": len(table_markdowns),
                 "section_detection": detection_method,
                 "page_source": "explicit_breaks" if has_page_breaks else "estimated",
             }
