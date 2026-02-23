@@ -271,8 +271,108 @@ class DOCXParser(BaseParser):
     """Parser for DOCX documents."""
 
     def parse(self, file_path: Path) -> ParseResult:
-        """Parse DOCX document."""
-        doc = Document(file_path)
+        """Parse DOCX document. Falls back to raw ZIP/XML extraction on failure."""
+        try:
+            doc = Document(file_path)
+        except Exception as e:
+            logger.warning(
+                "python-docx rejected %s (%s), attempting ZIP/XML fallback",
+                file_path.name, e,
+            )
+            return self._parse_zip_fallback(file_path)
+        return self._parse_standard(file_path, doc)
+
+    def _parse_zip_fallback(self, file_path: Path) -> ParseResult:
+        """Extract text from a .docx ZIP archive when python-docx rejects it.
+
+        Opens the file as a ZIP, finds word/document.xml (or any XML with text),
+        and extracts text content using stdlib xml.etree.
+        """
+        import zipfile
+        import xml.etree.ElementTree as ET
+
+        ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        try:
+            with zipfile.ZipFile(file_path) as zf:
+                # Try the standard location first
+                xml_candidates = ["word/document.xml"]
+                # Also try any XML file that might contain word content
+                xml_candidates.extend(
+                    n for n in zf.namelist()
+                    if n.endswith(".xml") and n not in xml_candidates
+                )
+
+                paragraphs: list[str] = []
+                for candidate in xml_candidates:
+                    if candidate not in zf.namelist():
+                        continue
+                    try:
+                        tree = ET.parse(zf.open(candidate))
+                        root = tree.getroot()
+                        # Extract text from <w:t> elements
+                        for t_elem in root.iter(f"{{{ns}}}t"):
+                            if t_elem.text:
+                                paragraphs.append(t_elem.text)
+                    except ET.ParseError:
+                        continue
+
+                    if paragraphs:
+                        break  # Found text, stop searching
+
+                if not paragraphs:
+                    # Last resort: extract all text from all XML files
+                    for name in zf.namelist():
+                        if name.endswith(".xml"):
+                            try:
+                                tree = ET.parse(zf.open(name))
+                                for elem in tree.iter():
+                                    if elem.text and elem.text.strip():
+                                        paragraphs.append(elem.text.strip())
+                            except ET.ParseError:
+                                continue
+
+        except zipfile.BadZipFile:
+            return ParseResult(
+                filename=file_path.name,
+                sections=[Section(title="Document", content="Unable to read file: not a valid DOCX/ZIP archive.")],
+                raw_text="",
+                page_count=1,
+                metadata={"parser": "docx-failed", "error": "BadZipFile"},
+            )
+
+        raw_text = "\n".join(paragraphs)
+        if not raw_text.strip():
+            return ParseResult(
+                filename=file_path.name,
+                sections=[Section(title="Document", content="No readable text found in document.")],
+                raw_text="",
+                page_count=1,
+                metadata={"parser": "docx-zip-fallback", "error": "no_text_extracted"},
+            )
+
+        # Use text parser logic to find sections
+        from .text_parser import TextParser
+        text_parser = TextParser()
+        sections = text_parser._detect_sections(raw_text.splitlines())
+        if not sections:
+            sections = [Section(title="Document", content=raw_text)]
+
+        logger.info(
+            "ZIP/XML fallback extracted %d paragraphs, %d sections from %s",
+            len(paragraphs), len(sections), file_path.name,
+        )
+
+        return ParseResult(
+            filename=file_path.name,
+            sections=sections,
+            raw_text=raw_text,
+            page_count=1,
+            metadata={"parser": "docx-zip-fallback", "paragraph_count": len(paragraphs)},
+        )
+
+    def _parse_standard(self, file_path: Path, doc) -> ParseResult:
+        """Standard python-docx parsing path."""
 
         # Pre-scan for explicit page breaks (accurate when present)
         page_map = _build_page_map(doc)

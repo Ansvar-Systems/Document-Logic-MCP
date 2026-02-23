@@ -215,9 +215,12 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
 
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.error(f"Parse content rejected: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Parse content failed: {e}")
-        raise HTTPException(status_code=500, detail="Content parsing failed")
+        raise HTTPException(status_code=500, detail=f"Parse failed: {type(e).__name__}: {e}")
 
 
 # Extract document endpoint
