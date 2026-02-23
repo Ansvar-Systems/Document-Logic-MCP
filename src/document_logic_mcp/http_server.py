@@ -126,7 +126,7 @@ class ExtractDocumentRequest(BaseModel):
             "Activates domain-specific prompt supplements (Pass 2) and "
             "cross-section synthesis (Pass 3: component registry, trust boundaries, "
             "implicit negatives, ambiguity flags). "
-            "Available: 'stride_threat_modeling', 'tprm_vendor_assessment'"
+            "Available: 'stride_threat_modeling', 'tprm_vendor_assessment', 'compliance_mapping'"
         )
     )
 

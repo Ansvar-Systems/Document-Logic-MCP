@@ -225,6 +225,72 @@ Every extracted entity MUST include source_document_sections with:
 
 If you cannot determine the source for an entity, DO NOT extract it.
 """,
+
+    "compliance_mapping": """
+**Additional extraction focus (Compliance Mapping):**
+
+- **Legal obligations**: Extract EVERY obligation, requirement, or duty imposed by
+  the regulation. For each obligation capture:
+  - The exact article/section reference (e.g., "Article 33(1)", "§ 164.312(a)(1)")
+  - The responsible party (who must comply — controller, processor, operator,
+    covered entity, financial institution, etc.)
+  - The action required (what must be done)
+  - Any deadline or time constraint (e.g., "within 72 hours", "by 17 October 2024",
+    "annually", "without undue delay")
+  - Conditions or triggers (when the obligation applies)
+  - Exemptions or exceptions (who/what is excluded)
+  Create truths with statement_type="requirement" for each obligation.
+
+- **Temporal requirements**: Pay special attention to ALL time-bound requirements:
+  - Notification windows (breach notification deadlines, reporting periods)
+  - Implementation deadlines (transposition dates, compliance deadlines)
+  - Review/renewal periods (periodic assessments, audit cycles, certification renewals)
+  - Retention periods (data retention, record-keeping obligations)
+  - Grace periods and transitional provisions
+  For each, extract the exact duration/date AND the triggering event or start point.
+
+- **Penalty and enforcement structures**: Extract all penalty provisions including:
+  - Maximum fine amounts (absolute values AND revenue-based calculations,
+    e.g., "up to EUR 10,000,000 or 2% of annual worldwide turnover")
+  - Tiered penalty structures (distinguish between levels/categories of violations)
+  - Criminal sanctions (imprisonment, personal liability)
+  - Administrative measures (cease-and-desist, suspension of operations,
+    withdrawal of certification)
+  - Enforcement bodies (which authority enforces — DPA, sectoral regulator, etc.)
+  - Aggravating and mitigating factors for penalty calculation
+  - Private right of action / right to compensation
+
+- **Cross-regulation references**: Identify every reference to other legal
+  instruments, standards, or frameworks:
+  - Explicit references ("in accordance with Regulation (EU) 2016/679",
+    "as defined in Directive 2013/40/EU")
+  - Standard references (ISO 27001, NIST CSF, CIS Controls, etc.)
+  - Mutual recognition or equivalence clauses
+  - Relationship to other laws (lex specialis, complementary, superseding)
+  - Delegated/implementing acts referenced
+  Create relationships with relationship_type="references" for each cross-reference.
+
+- **Scope definitions**: Extract the complete applicability scope:
+  - Entity types covered (by size, sector, function — e.g., "essential entities",
+    "operators of essential services", "large enterprises")
+  - Entity types excluded (SME exemptions, sector carve-outs)
+  - Data types in scope (personal data, health data, financial data, etc.)
+  - Geographic scope (territorial applicability, extraterritorial reach)
+  - Sectoral scope (which industries/sectors, Annex references)
+  - Material scope (which activities — processing, transferring, storing, etc.)
+  - Thresholds for applicability (revenue thresholds, employee counts,
+    data volume thresholds)
+
+- **Definitions**: Extract all defined terms with their exact definitions and
+  article references. Regulatory definitions are critical for scope determination.
+  Create truths with statement_type="assertion" for each definition.
+
+**CRITICAL for compliance mapping:**
+- Use EXACT article/section references — never approximate ("Article 5" not "around Article 5")
+- Preserve regulatory language precisely — do not paraphrase obligation text
+- Distinguish between mandatory ("shall", "must") and discretionary ("may", "should") language
+- Flag delegated/implementing acts that may contain additional obligations not in the primary text
+""",
 }
 
 
@@ -302,6 +368,44 @@ given what the document covers. This MUST be contextual:
 **4. ambiguities** — Vague security language that lacks mechanism specifics. Look for:
 "sanitized", "filtered", "encrypted", "secured", "validated", "hardened", "protected",
 "restricted", "monitored" — when used without specifying HOW.
+
+**Context-specific synthesis (if analysis_context="compliance_mapping"):**
+
+When consolidating regulatory/legal documents, ADD these additional sections to the
+output JSON (in addition to the 4 base sections above):
+
+**5. obligation_registry** — All legal obligations extracted, deduplicated and consolidated.
+For each obligation: obligation_id (OBL-NNN), article_reference, obligation_text (exact
+regulatory language), responsible_party, action_required, deadline (if any), conditions,
+exemptions, obligation_type (notification/implementation/operational/reporting/record_keeping),
+and evidence citation.
+
+**6. deadline_inventory** — All temporal requirements consolidated. For each deadline:
+deadline_id (DL-NNN), requirement description, article_reference, duration or date,
+trigger_event (what starts the clock), deadline_type (notification_window/implementation_deadline/
+review_period/retention_period/grace_period/transitional_provision), responsible_party,
+and evidence citation.
+
+**7. penalty_structures** — All enforcement mechanisms. For each penalty tier:
+penalty_id (PEN-NNN), article_reference, violation_category, max_fine_absolute,
+max_fine_revenue_based (if applicable), calculation_method, criminal_sanctions (if any),
+administrative_measures (list), enforcement_body, aggravating_factors, mitigating_factors,
+private_right_of_action (boolean), and evidence citation.
+
+**8. cross_regulation_references** — Every reference to external legal instruments.
+For each: reference_id (XREF-NNN), source_article (where in this document),
+referenced_instrument (full name + citation), reference_type (complementary/superseding/
+lex_specialis/delegated_act/implementing_act/standard/equivalence), relationship_description,
+and evidence citation.
+
+**9. scope_definitions** — Complete applicability map. Contains:
+- entity_types_included: array of {entity_type, description, article_reference, evidence}
+- entity_types_excluded: array of {entity_type, description, article_reference, evidence}
+- data_types_in_scope: array of data type strings
+- geographic_scope: territorial applicability description
+- sectoral_scope: array of sector/industry strings
+- material_scope: which activities are covered
+- applicability_thresholds: array of {threshold_type, value, article_reference}
 
 **Context-specific synthesis (if analysis_context="tprm_vendor_assessment"):**
 
@@ -447,7 +551,92 @@ Return JSON:
         }}
       ]
     }}
-  ]
+  ],
+
+  // ─── Compliance-specific fields (only if analysis_context="compliance_mapping") ───
+
+  "obligation_registry": [
+    {{
+      "obligation_id": "OBL-001",
+      "article_reference": "Article 33(1)",
+      "obligation_text": "The controller shall notify the supervisory authority of a personal data breach within 72 hours of becoming aware of it",
+      "responsible_party": "controller",
+      "action_required": "Notify supervisory authority of personal data breach",
+      "deadline": "72 hours from awareness",
+      "conditions": "Unless the breach is unlikely to result in a risk to rights and freedoms",
+      "exemptions": "Breach unlikely to result in risk to natural persons' rights and freedoms",
+      "obligation_type": "notification",
+      "evidence": "Section: Breach Notification, Page: 45"
+    }}
+  ],
+  "deadline_inventory": [
+    {{
+      "deadline_id": "DL-001",
+      "requirement": "Breach notification to supervisory authority",
+      "article_reference": "Article 33(1)",
+      "duration": "72 hours",
+      "trigger_event": "Becoming aware of a personal data breach",
+      "deadline_type": "notification_window",
+      "responsible_party": "controller",
+      "evidence": "Section: Breach Notification, Page: 45"
+    }}
+  ],
+  "penalty_structures": [
+    {{
+      "penalty_id": "PEN-001",
+      "article_reference": "Article 83(5)",
+      "violation_category": "Infringement of basic principles for processing",
+      "max_fine_absolute": "EUR 20,000,000",
+      "max_fine_revenue_based": "4% of total worldwide annual turnover",
+      "calculation_method": "whichever is higher",
+      "criminal_sanctions": null,
+      "administrative_measures": ["cease processing", "suspension of data flows"],
+      "enforcement_body": "National supervisory authority (DPA)",
+      "aggravating_factors": ["intentional character", "failure to cooperate"],
+      "mitigating_factors": ["degree of cooperation", "measures taken to mitigate damage"],
+      "private_right_of_action": true,
+      "evidence": "Section: Penalties, Page: 82"
+    }}
+  ],
+  "cross_regulation_references": [
+    {{
+      "reference_id": "XREF-001",
+      "source_article": "Article 2(3)",
+      "referenced_instrument": "Regulation (EU) 2016/679 (GDPR)",
+      "reference_type": "complementary",
+      "relationship_description": "Processing of personal data under this regulation is subject to GDPR",
+      "evidence": "Section: Scope, Page: 3"
+    }}
+  ],
+  "scope_definitions": {{
+    "entity_types_included": [
+      {{
+        "entity_type": "essential entities",
+        "description": "Entities in sectors listed in Annex I exceeding medium-sized enterprise thresholds",
+        "article_reference": "Article 3(1)",
+        "evidence": "Section: Scope, Page: 5"
+      }}
+    ],
+    "entity_types_excluded": [
+      {{
+        "entity_type": "micro enterprises",
+        "description": "Enterprises with fewer than 10 employees and annual turnover below EUR 2 million",
+        "article_reference": "Article 2(1)",
+        "evidence": "Section: Scope, Page: 3"
+      }}
+    ],
+    "data_types_in_scope": ["personal data", "network and information system data"],
+    "geographic_scope": "EU Member States, with extraterritorial reach for entities providing services in the EU",
+    "sectoral_scope": ["energy", "transport", "banking", "health", "digital infrastructure"],
+    "material_scope": "Security of network and information systems",
+    "applicability_thresholds": [
+      {{
+        "threshold_type": "enterprise_size",
+        "value": "Medium-sized or larger (50+ employees or EUR 10M+ turnover)",
+        "article_reference": "Article 2(1)"
+      }}
+    ]
+  }}
 }}
 
 Critical:

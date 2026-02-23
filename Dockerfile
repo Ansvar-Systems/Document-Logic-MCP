@@ -14,8 +14,13 @@ WORKDIR /app
 COPY src/ /app/src/
 COPY pyproject.toml /app/
 
-# Install package (production only — no dev dependencies in container)
-RUN pip install --no-cache-dir -e .
+# Install package (without sentence-transformers/torch — embeddings are lazy-loaded
+# and will gracefully degrade if unavailable)
+RUN pip install --no-cache-dir --timeout 120 \
+    mcp anthropic pdfplumber python-docx pytesseract Pillow \
+    aiosqlite fastapi "uvicorn[standard]" numpy \
+    openpyxl python-pptx beautifulsoup4 pdf2image \
+    && pip install --no-cache-dir --no-deps -e .
 
 # Create non-root user and data directory
 RUN useradd -m -u 1000 appuser \
@@ -27,9 +32,9 @@ USER appuser
 # Expose port
 EXPOSE 3000
 
-# Health check — allows Docker/orchestrators to detect unhealthy containers
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')" || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=2).read()"
 
 # Run HTTP server
 CMD ["python", "-m", "document_logic_mcp", "--http"]

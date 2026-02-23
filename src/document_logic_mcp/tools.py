@@ -12,6 +12,7 @@ The analysis_context parameter enables domain-specific extraction intelligence.
 See CONTEXT_SUPPLEMENTS in prompts.py for available contexts:
 - "stride_threat_modeling": Trust boundaries, data flow directionality, implicit negatives
 - "tprm_vendor_assessment": Certifications, subprocessors, SLAs, data residency
+- "compliance_mapping": Obligations, deadlines, penalties, cross-references, scope definitions
 """
 
 import logging
@@ -21,7 +22,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 from .database import Database
-from .parsers import PDFParser, DOCXParser, JSONParser
+from .parsers import (
+    PDFParser, DOCXParser, JSONParser,
+    TextParser, MarkdownParser, CSVParser,
+    XLSXParser, PPTXParser, HTMLParser,
+    ImageParser,
+)
 from .extraction import DocumentExtractor
 from .resources import resolve_technology_name as _resolve_tech, suggest_terminology_addition as _suggest_term
 
@@ -75,14 +81,30 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
 
     # Select parser based on extension
     suffix = file_path.suffix.lower()
-    if suffix == ".pdf":
-        parser = PDFParser()
-    elif suffix == ".docx":
-        parser = DOCXParser()
-    elif suffix == ".json":
-        parser = JSONParser()
-    else:
+    parser_map = {
+        ".pdf": PDFParser,
+        ".docx": DOCXParser,
+        ".json": JSONParser,
+        ".txt": TextParser,
+        ".md": MarkdownParser,
+        ".csv": CSVParser,
+        ".xlsx": XLSXParser,
+        ".pptx": PPTXParser,
+        ".html": HTMLParser,
+        ".htm": HTMLParser,
+        ".png": ImageParser,
+        ".jpg": ImageParser,
+        ".jpeg": ImageParser,
+        ".tiff": ImageParser,
+        ".tif": ImageParser,
+        ".bmp": ImageParser,
+        ".gif": ImageParser,
+        ".webp": ImageParser,
+    }
+    parser_cls = parser_map.get(suffix)
+    if parser_cls is None:
         raise ValueError(f"Unsupported file type: {suffix}")
+    parser = parser_cls()
 
     # Parse document
     logger.info(f"Parsing {file_path.name}...")
@@ -163,7 +185,7 @@ async def extract_document_tool(
             1. Domain-specific prompt supplements for per-section extraction (Pass 2)
             2. Cross-section synthesis pass (Pass 3) producing component registry,
                trust boundaries, implicit negatives, and ambiguity flags
-            Available contexts: "stride_threat_modeling", "tprm_vendor_assessment"
+            Available contexts: "stride_threat_modeling", "tprm_vendor_assessment", "compliance_mapping"
     """
     from .parsers.base import ParseResult, Section
     from .storage import ExtractionStorage
@@ -325,6 +347,107 @@ async def extract_document_tool(
                     for amb in synthesis.ambiguities
                 ],
             }
+
+            # Compliance mapping fields (populated when analysis_context="compliance_mapping")
+            if synthesis.obligation_registry:
+                synthesis_output["obligation_registry"] = [
+                    {
+                        "obligation_id": obl.obligation_id,
+                        "article_reference": obl.article_reference,
+                        "obligation_text": obl.obligation_text,
+                        "responsible_party": obl.responsible_party,
+                        "action_required": obl.action_required,
+                        "obligation_type": obl.obligation_type,
+                        "deadline": obl.deadline,
+                        "conditions": obl.conditions,
+                        "exemptions": obl.exemptions,
+                        "evidence": obl.evidence,
+                    }
+                    for obl in synthesis.obligation_registry
+                ]
+
+            if synthesis.deadline_inventory:
+                synthesis_output["deadline_inventory"] = [
+                    {
+                        "deadline_id": dl.deadline_id,
+                        "requirement": dl.requirement,
+                        "article_reference": dl.article_reference,
+                        "duration": dl.duration,
+                        "trigger_event": dl.trigger_event,
+                        "deadline_type": dl.deadline_type,
+                        "responsible_party": dl.responsible_party,
+                        "evidence": dl.evidence,
+                    }
+                    for dl in synthesis.deadline_inventory
+                ]
+
+            if synthesis.penalty_structures:
+                synthesis_output["penalty_structures"] = [
+                    {
+                        "penalty_id": pen.penalty_id,
+                        "article_reference": pen.article_reference,
+                        "violation_category": pen.violation_category,
+                        "enforcement_body": pen.enforcement_body,
+                        "max_fine_absolute": pen.max_fine_absolute,
+                        "max_fine_revenue_based": pen.max_fine_revenue_based,
+                        "calculation_method": pen.calculation_method,
+                        "criminal_sanctions": pen.criminal_sanctions,
+                        "administrative_measures": pen.administrative_measures,
+                        "aggravating_factors": pen.aggravating_factors,
+                        "mitigating_factors": pen.mitigating_factors,
+                        "private_right_of_action": pen.private_right_of_action,
+                        "evidence": pen.evidence,
+                    }
+                    for pen in synthesis.penalty_structures
+                ]
+
+            if synthesis.cross_regulation_references:
+                synthesis_output["cross_regulation_references"] = [
+                    {
+                        "reference_id": xref.reference_id,
+                        "source_article": xref.source_article,
+                        "referenced_instrument": xref.referenced_instrument,
+                        "reference_type": xref.reference_type,
+                        "relationship_description": xref.relationship_description,
+                        "evidence": xref.evidence,
+                    }
+                    for xref in synthesis.cross_regulation_references
+                ]
+
+            if synthesis.scope_definitions:
+                sd = synthesis.scope_definitions
+                synthesis_output["scope_definitions"] = {
+                    "entity_types_included": [
+                        {
+                            "entity_type": et.entity_type,
+                            "description": et.description,
+                            "article_reference": et.article_reference,
+                            "evidence": et.evidence,
+                        }
+                        for et in sd.entity_types_included
+                    ],
+                    "entity_types_excluded": [
+                        {
+                            "entity_type": et.entity_type,
+                            "description": et.description,
+                            "article_reference": et.article_reference,
+                            "evidence": et.evidence,
+                        }
+                        for et in sd.entity_types_excluded
+                    ],
+                    "data_types_in_scope": sd.data_types_in_scope,
+                    "geographic_scope": sd.geographic_scope,
+                    "sectoral_scope": sd.sectoral_scope,
+                    "material_scope": sd.material_scope,
+                    "applicability_thresholds": [
+                        {
+                            "threshold_type": at.threshold_type,
+                            "value": at.value,
+                            "article_reference": at.article_reference,
+                        }
+                        for at in sd.applicability_thresholds
+                    ],
+                }
             logger.info(
                 f"Pass 3 complete: {len(synthesis.component_registry)} components, "
                 f"{len(synthesis.trust_boundaries)} trust boundaries, "

@@ -156,6 +156,115 @@ class AmbiguityFlag:
     clarification_needed: Optional[str] = None  # what specifically is unclear
 
 
+# ─── Compliance mapping synthesis schemas ─────────────────────────────
+
+
+@dataclass
+class ObligationEntry:
+    """A legal obligation extracted from a regulatory document.
+
+    Captures the article reference, responsible party, required action,
+    and any temporal or conditional constraints on the obligation.
+    """
+    obligation_id: str               # e.g., "OBL-001"
+    article_reference: str           # e.g., "Article 33(1)"
+    obligation_text: str             # exact regulatory language
+    responsible_party: str           # e.g., "controller", "operator"
+    action_required: str             # what must be done
+    obligation_type: str             # notification/implementation/operational/reporting/record_keeping
+    deadline: Optional[str] = None   # temporal constraint if any
+    conditions: Optional[str] = None # when the obligation applies
+    exemptions: Optional[str] = None # who/what is excluded
+    evidence: Optional[str] = None   # source citation
+
+
+@dataclass
+class DeadlineEntry:
+    """A temporal requirement extracted from a regulatory document.
+
+    Covers notification windows, implementation deadlines, review periods,
+    retention periods, grace periods, and transitional provisions.
+    """
+    deadline_id: str                     # e.g., "DL-001"
+    requirement: str                     # what the deadline applies to
+    article_reference: str               # source article/section
+    duration: str                        # e.g., "72 hours", "by 17 October 2024"
+    trigger_event: str                   # what starts the clock
+    deadline_type: str                   # notification_window/implementation_deadline/review_period/retention_period/grace_period/transitional_provision
+    responsible_party: Optional[str] = None
+    evidence: Optional[str] = None
+
+
+@dataclass
+class PenaltyEntry:
+    """A penalty or enforcement mechanism from a regulatory document.
+
+    Captures fine amounts (absolute and revenue-based), criminal sanctions,
+    administrative measures, and enforcement body information.
+    """
+    penalty_id: str                                    # e.g., "PEN-001"
+    article_reference: str                             # source article/section
+    violation_category: str                            # what type of violation
+    enforcement_body: Optional[str] = None             # which authority enforces
+    max_fine_absolute: Optional[str] = None            # e.g., "EUR 20,000,000"
+    max_fine_revenue_based: Optional[str] = None       # e.g., "4% of annual worldwide turnover"
+    calculation_method: Optional[str] = None           # e.g., "whichever is higher"
+    criminal_sanctions: Optional[str] = None           # imprisonment, personal liability
+    administrative_measures: List[str] = field(default_factory=list)  # cease-and-desist, suspension, etc.
+    aggravating_factors: List[str] = field(default_factory=list)
+    mitigating_factors: List[str] = field(default_factory=list)
+    private_right_of_action: bool = False
+    evidence: Optional[str] = None
+
+
+@dataclass
+class CrossRegulationReference:
+    """A reference to another legal instrument, standard, or framework.
+
+    Captures the relationship type (complementary, superseding, lex specialis,
+    delegated act, etc.) and the source/target articles.
+    """
+    reference_id: str                    # e.g., "XREF-001"
+    source_article: str                  # where in this document
+    referenced_instrument: str           # full name + citation of referenced law/standard
+    reference_type: str                  # complementary/superseding/lex_specialis/delegated_act/implementing_act/standard/equivalence
+    relationship_description: str        # how the two instruments relate
+    evidence: Optional[str] = None
+
+
+@dataclass
+class ScopeEntityType:
+    """An entity type that is included in or excluded from regulatory scope."""
+    entity_type: str                     # e.g., "essential entities"
+    description: str                     # detailed description
+    article_reference: Optional[str] = None
+    evidence: Optional[str] = None
+
+
+@dataclass
+class ApplicabilityThreshold:
+    """A threshold that determines whether an entity falls in scope."""
+    threshold_type: str                  # e.g., "enterprise_size", "revenue", "data_volume"
+    value: str                           # e.g., "50+ employees or EUR 10M+ turnover"
+    article_reference: Optional[str] = None
+
+
+@dataclass
+class ScopeDefinition:
+    """Complete applicability scope of a regulation.
+
+    Captures who/what the regulation applies to, including entity types,
+    data types, geographic reach, sectoral scope, and thresholds.
+    """
+    entity_types_included: List[ScopeEntityType] = field(default_factory=list)
+    entity_types_excluded: List[ScopeEntityType] = field(default_factory=list)
+    data_types_in_scope: List[str] = field(default_factory=list)
+    geographic_scope: Optional[str] = None
+    sectoral_scope: List[str] = field(default_factory=list)
+    material_scope: Optional[str] = None
+    applicability_thresholds: List[ApplicabilityThreshold] = field(default_factory=list)
+
+
 @dataclass
 class ExtractionSynthesis:
     """Cross-section consolidation output from Pass 3.
@@ -168,3 +277,9 @@ class ExtractionSynthesis:
     implicit_negatives: List[ImplicitNegative]
     ambiguities: List[AmbiguityFlag]
     analysis_context: str  # which context produced this synthesis
+    # Compliance mapping fields (populated when analysis_context="compliance_mapping")
+    obligation_registry: List[ObligationEntry] = field(default_factory=list)
+    deadline_inventory: List[DeadlineEntry] = field(default_factory=list)
+    penalty_structures: List[PenaltyEntry] = field(default_factory=list)
+    cross_regulation_references: List[CrossRegulationReference] = field(default_factory=list)
+    scope_definitions: Optional[ScopeDefinition] = None

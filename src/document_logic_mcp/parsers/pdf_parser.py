@@ -1,4 +1,4 @@
-"""PDF document parser using pdfplumber."""
+"""PDF document parser using pdfplumber with OCR fallback for scanned pages."""
 
 import logging
 import re
@@ -6,6 +6,10 @@ from pathlib import Path
 from .base import BaseParser, ParseResult, Section
 
 logger = logging.getLogger(__name__)
+
+# Minimum non-whitespace characters per page before triggering OCR fallback.
+# Pages with fewer characters than this are considered "scanned" / image-only.
+_OCR_THRESHOLD = 50
 
 # Numbered heading patterns (same as DOCX parser — shared heuristic).
 _NUMBERED_HEADING_PATTERNS = [
@@ -62,20 +66,41 @@ def _is_heading(line: str) -> bool:
 
 
 class PDFParser(BaseParser):
-    """Parser for PDF documents."""
+    """Parser for PDF documents with OCR fallback for scanned pages."""
 
     def parse(self, file_path: Path) -> ParseResult:
-        """Parse PDF document."""
+        """Parse PDF document. Falls back to OCR for scanned/image-only pages."""
         import pdfplumber
 
         sections = []
         raw_text = []
+        ocr_pages = 0
 
         with pdfplumber.open(file_path) as pdf:
             page_count = len(pdf.pages)
 
+            # First pass: extract text from all pages, identify scanned pages
+            page_texts: list[tuple[int, str]] = []
+            scanned_page_nums: list[int] = []
+
             for page_num, page in enumerate(pdf.pages, 1):
                 text = page.extract_text() or ""
+                non_ws = len(text.replace(" ", "").replace("\n", "").replace("\t", ""))
+                if non_ws < _OCR_THRESHOLD:
+                    scanned_page_nums.append(page_num)
+                page_texts.append((page_num, text))
+
+            # OCR scanned pages if any were detected
+            ocr_results: dict[int, str] = {}
+            if scanned_page_nums:
+                ocr_results = self._ocr_pages(file_path, scanned_page_nums)
+                ocr_pages = len([p for p in scanned_page_nums if ocr_results.get(p, "").strip()])
+
+            # Build sections using best text per page
+            for page_num, text in page_texts:
+                if page_num in ocr_results and ocr_results[page_num].strip():
+                    text = ocr_results[page_num]
+
                 raw_text.append(text)
 
                 lines = text.split('\n')
@@ -119,13 +144,48 @@ class PDFParser(BaseParser):
                     page_end=page_count
                 ))
 
+            parser_name = "pdfplumber"
+            if ocr_pages:
+                parser_name = f"pdfplumber+ocr({ocr_pages}/{page_count} pages)"
+                logger.info(
+                    f"OCR applied to {ocr_pages}/{page_count} scanned pages in {file_path.name}"
+                )
+
             return ParseResult(
                 filename=file_path.name,
                 sections=sections,
                 raw_text='\n'.join(raw_text),
                 page_count=page_count,
                 metadata={
-                    "parser": "pdfplumber",
+                    "parser": parser_name,
                     "page_count": page_count,
+                    "ocr_pages": ocr_pages,
                 }
             )
+
+    @staticmethod
+    def _ocr_pages(file_path: Path, page_nums: list[int]) -> dict[int, str]:
+        """OCR specific pages of a PDF using pdf2image + pytesseract."""
+        try:
+            from pdf2image import convert_from_path
+            import pytesseract
+        except ImportError as e:
+            logger.warning(f"OCR dependencies not available, skipping scanned pages: {e}")
+            return {}
+
+        results: dict[int, str] = {}
+        for page_num in page_nums:
+            try:
+                images = convert_from_path(
+                    file_path,
+                    first_page=page_num,
+                    last_page=page_num,
+                    dpi=300,
+                )
+                if images:
+                    text = pytesseract.image_to_string(images[0])
+                    results[page_num] = text.strip()
+            except Exception as e:
+                logger.warning(f"OCR failed for page {page_num} of {file_path.name}: {e}")
+
+        return results

@@ -40,6 +40,13 @@ from .schemas import (
     TrustBoundaryCrossing,
     ImplicitNegative,
     AmbiguityFlag,
+    ObligationEntry,
+    DeadlineEntry,
+    PenaltyEntry,
+    CrossRegulationReference,
+    ScopeEntityType,
+    ApplicabilityThreshold,
+    ScopeDefinition,
     StatementType,
 )
 from ..parsers.base import ParseResult
@@ -358,6 +365,43 @@ class DocumentExtractor:
         response_text = await self._call_llm(prompt)
         result = self._parse_json_response(response_text)
 
+        # Parse compliance mapping fields (only present when analysis_context="compliance_mapping")
+        scope_def_raw = result.get("scope_definitions")
+        scope_definitions = None
+        if scope_def_raw and isinstance(scope_def_raw, dict):
+            scope_definitions = ScopeDefinition(
+                entity_types_included=[
+                    ScopeEntityType(
+                        entity_type=et["entity_type"],
+                        description=et.get("description", ""),
+                        article_reference=et.get("article_reference"),
+                        evidence=et.get("evidence"),
+                    )
+                    for et in scope_def_raw.get("entity_types_included", [])
+                ],
+                entity_types_excluded=[
+                    ScopeEntityType(
+                        entity_type=et["entity_type"],
+                        description=et.get("description", ""),
+                        article_reference=et.get("article_reference"),
+                        evidence=et.get("evidence"),
+                    )
+                    for et in scope_def_raw.get("entity_types_excluded", [])
+                ],
+                data_types_in_scope=scope_def_raw.get("data_types_in_scope", []),
+                geographic_scope=scope_def_raw.get("geographic_scope"),
+                sectoral_scope=scope_def_raw.get("sectoral_scope", []),
+                material_scope=scope_def_raw.get("material_scope"),
+                applicability_thresholds=[
+                    ApplicabilityThreshold(
+                        threshold_type=at["threshold_type"],
+                        value=at["value"],
+                        article_reference=at.get("article_reference"),
+                    )
+                    for at in scope_def_raw.get("applicability_thresholds", [])
+                ],
+            )
+
         return ExtractionSynthesis(
             component_registry=[
                 ComponentEntry(
@@ -397,6 +441,64 @@ class DocumentExtractor:
                 for amb in result.get("ambiguities", [])
             ],
             analysis_context=analysis_context,
+            obligation_registry=[
+                ObligationEntry(
+                    obligation_id=obl.get("obligation_id", f"OBL-{i+1:03d}"),
+                    article_reference=obl["article_reference"],
+                    obligation_text=obl.get("obligation_text", ""),
+                    responsible_party=obl.get("responsible_party", ""),
+                    action_required=obl.get("action_required", ""),
+                    obligation_type=obl.get("obligation_type", "operational"),
+                    deadline=obl.get("deadline"),
+                    conditions=obl.get("conditions"),
+                    exemptions=obl.get("exemptions"),
+                    evidence=obl.get("evidence"),
+                )
+                for i, obl in enumerate(result.get("obligation_registry", []))
+            ],
+            deadline_inventory=[
+                DeadlineEntry(
+                    deadline_id=dl.get("deadline_id", f"DL-{i+1:03d}"),
+                    requirement=dl.get("requirement", ""),
+                    article_reference=dl["article_reference"],
+                    duration=dl.get("duration", ""),
+                    trigger_event=dl.get("trigger_event", ""),
+                    deadline_type=dl.get("deadline_type", "implementation_deadline"),
+                    responsible_party=dl.get("responsible_party"),
+                    evidence=dl.get("evidence"),
+                )
+                for i, dl in enumerate(result.get("deadline_inventory", []))
+            ],
+            penalty_structures=[
+                PenaltyEntry(
+                    penalty_id=pen.get("penalty_id", f"PEN-{i+1:03d}"),
+                    article_reference=pen["article_reference"],
+                    violation_category=pen.get("violation_category", ""),
+                    enforcement_body=pen.get("enforcement_body"),
+                    max_fine_absolute=pen.get("max_fine_absolute"),
+                    max_fine_revenue_based=pen.get("max_fine_revenue_based"),
+                    calculation_method=pen.get("calculation_method"),
+                    criminal_sanctions=pen.get("criminal_sanctions"),
+                    administrative_measures=pen.get("administrative_measures", []),
+                    aggravating_factors=pen.get("aggravating_factors", []),
+                    mitigating_factors=pen.get("mitigating_factors", []),
+                    private_right_of_action=pen.get("private_right_of_action", False),
+                    evidence=pen.get("evidence"),
+                )
+                for i, pen in enumerate(result.get("penalty_structures", []))
+            ],
+            cross_regulation_references=[
+                CrossRegulationReference(
+                    reference_id=xref.get("reference_id", f"XREF-{i+1:03d}"),
+                    source_article=xref.get("source_article", ""),
+                    referenced_instrument=xref["referenced_instrument"],
+                    reference_type=xref.get("reference_type", "complementary"),
+                    relationship_description=xref.get("relationship_description", ""),
+                    evidence=xref.get("evidence"),
+                )
+                for i, xref in enumerate(result.get("cross_regulation_references", []))
+            ],
+            scope_definitions=scope_definitions,
         )
 
     @staticmethod

@@ -86,7 +86,7 @@ def create_server() -> Server:
                         },
                         "analysis_context": {
                             "type": "string",
-                            "enum": ["stride_threat_modeling", "tprm_vendor_assessment"],
+                            "enum": ["stride_threat_modeling", "tprm_vendor_assessment", "compliance_mapping"],
                             "description": (
                                 "Optional. Activates domain-specific extraction (Pass 2) and "
                                 "cross-section synthesis (Pass 3). Choose ONE based on document type. "
@@ -95,7 +95,10 @@ def create_server() -> Server:
                                 "ambiguity flags. "
                                 "'tprm_vendor_assessment': for vendor questionnaires, SOC2 reports, "
                                 "privacy policies, DPAs. Extracts certifications, subprocessors, SLAs, "
-                                "data residency, incident response."
+                                "data residency, incident response. "
+                                "'compliance_mapping': for regulations, directives, legal texts, "
+                                "compliance frameworks. Extracts obligation registry, deadline inventory, "
+                                "penalty structures, cross-regulation references, scope definitions."
                             ),
                         },
                         "extraction_model": {
