@@ -718,10 +718,12 @@ async def delete_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
             DELETE FROM relationships WHERE source_doc_id = ?
         """, (doc_id,))
         await conn.execute("""
-            DELETE FROM entity_aliases WHERE entity_id IN (
+            DELETE FROM entity_aliases WHERE entity_a_id IN (
+                SELECT entity_id FROM entities WHERE doc_id = ?
+            ) OR entity_b_id IN (
                 SELECT entity_id FROM entities WHERE doc_id = ?
             )
-        """, (doc_id,))
+        """, (doc_id, doc_id))
         await conn.execute("DELETE FROM entities WHERE doc_id = ?", (doc_id,))
         await conn.execute("DELETE FROM sections WHERE doc_id = ?", (doc_id,))
         await conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
