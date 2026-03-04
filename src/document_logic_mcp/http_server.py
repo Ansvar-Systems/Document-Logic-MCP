@@ -3,12 +3,14 @@
 Provides HTTP endpoints for document processing tools to integrate with Ansvar platform.
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Security, Depends, APIRouter
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -245,6 +247,79 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Extract failed: {e}")
         raise HTTPException(status_code=500, detail="Document extraction failed")
+
+
+# Async extract endpoint — fire-and-forget, poll via GET /documents/{doc_id}
+@app.post("/extract-async")
+async def extract_document_async(request: ExtractDocumentRequest) -> JSONResponse:
+    """Start extraction as a background task and return immediately.
+
+    Returns HTTP 202 with {"status": "accepted", "doc_id": "..."}.
+    Poll GET /documents/{doc_id} to track progress:
+      - status "extracting" → still running
+      - status "completed"  → done (truths_count, entities_count populated)
+      - status "failed"     → extraction error
+    """
+    import aiosqlite
+
+    # Validate document exists and is in a valid state for extraction
+    if not db_path or not db_path.exists():
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    async with aiosqlite.connect(str(db_path)) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT status FROM documents WHERE doc_id = ?",
+            (request.doc_id,),
+        )
+        row = await cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Document {request.doc_id} not found")
+
+    doc_status = row["status"]
+    if doc_status == "extracting":
+        raise HTTPException(status_code=409, detail="Extraction already in progress")
+    if doc_status == "completed":
+        raise HTTPException(status_code=409, detail="Document already extracted")
+    if doc_status != "parsed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document status is '{doc_status}', expected 'parsed'",
+        )
+
+    # Launch extraction as a background asyncio task
+    asyncio.create_task(
+        _background_extract(
+            doc_id=request.doc_id,
+            extraction_model=request.model,
+            analysis_context=request.analysis_context,
+        )
+    )
+
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "doc_id": request.doc_id},
+    )
+
+
+async def _background_extract(
+    doc_id: str,
+    extraction_model: str | None,
+    analysis_context: str | None,
+) -> None:
+    """Run extraction in the background. Errors are captured in document status."""
+    try:
+        await extract_document_tool(
+            doc_id=doc_id,
+            db_path=db_path,
+            extraction_model=extraction_model,
+            analysis_context=analysis_context,
+        )
+        logger.info("Background extraction completed for %s", doc_id)
+    except Exception:
+        # extract_document_tool already sets status to "failed" on error
+        logger.exception("Background extraction failed for %s", doc_id)
 
 
 # List documents endpoint

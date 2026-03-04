@@ -260,6 +260,35 @@ async def extract_document_tool(
         metadata={}
     )
 
+    try:
+        return await _run_extraction_pipeline(
+            doc_id=doc_id, db=db, extractor=extractor, storage=storage,
+            parse_result=parse_result, sections=sections, filename=filename,
+            analysis_context=analysis_context,
+        )
+    except Exception:
+        # Set document status to "failed" so it doesn't stay stuck in "extracting"
+        async with db.connection() as conn:
+            await conn.execute(
+                "UPDATE documents SET status = ? WHERE doc_id = ?",
+                ("failed", doc_id)
+            )
+            await conn.commit()
+        raise
+
+
+async def _run_extraction_pipeline(
+    *,
+    doc_id: str,
+    db: Database,
+    extractor: "DocumentExtractor",
+    storage: "ExtractionStorage",
+    parse_result: "ParseResult",
+    sections: list,
+    filename: str,
+    analysis_context: Optional[str],
+) -> Dict[str, Any]:
+    """Core extraction pipeline (Pass 1-3). Separated to allow error handling in caller."""
     # Pass 1: Extract overview
     logger.info("Pass 1: Extracting document overview...")
     overview = await extractor.extract_overview(parse_result)
