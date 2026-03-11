@@ -73,7 +73,7 @@ class TestFTS5Search:
             await conn.commit()
 
         query_engine = QueryEngine(db)
-        results = await query_engine.query("AES encryption")
+        results = await query_engine.query("AES encryption", org_id="legacy_unassigned")
 
         assert len(results) > 0
         assert "AES-256" in results[0]["statement"]
@@ -99,7 +99,7 @@ class TestFTS5Search:
             await conn.commit()
 
         query_engine = QueryEngine(db)
-        results = await query_engine.query("quantum computing blockchain")
+        results = await query_engine.query("quantum computing blockchain", org_id="legacy_unassigned")
 
         assert len(results) == 0
 
@@ -124,7 +124,7 @@ class TestFTS5Search:
             await conn.commit()
 
         query_engine = QueryEngine(db)
-        results = await query_engine.query("encryption", top_k=3)
+        results = await query_engine.query("encryption", org_id="legacy_unassigned", top_k=3)
 
         assert len(results) <= 3
 
@@ -175,12 +175,12 @@ class TestFileValidation:
     @pytest.mark.asyncio
     async def test_unsupported_format_raises(self, tmp_path):
         """Unsupported file extensions should raise ValueError."""
-        txt_file = tmp_path / "test.txt"
+        txt_file = tmp_path / "test.exe"
         txt_file.write_text("content")
         db_path = tmp_path / "test.db"
 
         with pytest.raises(ValueError, match="Unsupported file type"):
-            await parse_document_tool(str(txt_file), db_path)
+            await parse_document_tool(str(txt_file), db_path, org_id="org-1", owner_user_id="user-1")
 
 
 # --- list_documents pagination ---
@@ -203,7 +203,7 @@ class TestListDocumentsPagination:
                 """, (f"doc{i}", f"file{i}.pdf"))
             await conn.commit()
 
-        result = await list_documents_tool(tmp_path / "test.db", limit=2, offset=0)
+        result = await list_documents_tool(tmp_path / "test.db", org_id="legacy_unassigned", limit=2, offset=0)
         assert result["count"] == 2
         assert result["total"] == 5
 
@@ -222,6 +222,6 @@ class TestListDocumentsPagination:
                 """, (f"doc{i}", f"file{i}.pdf"))
             await conn.commit()
 
-        result = await list_documents_tool(tmp_path / "test.db", limit=100, offset=3)
+        result = await list_documents_tool(tmp_path / "test.db", org_id="legacy_unassigned", limit=100, offset=3)
         assert result["count"] == 2  # 5 total, skip 3 = 2 remaining
         assert result["total"] == 5

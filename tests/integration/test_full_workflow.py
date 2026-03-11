@@ -27,7 +27,9 @@ async def test_full_document_workflow(tmp_path):
     # Step 1: Parse document
     parse_result = await parse_document_tool(
         file_path=str(test_doc),
-        db_path=db_path
+        db_path=db_path,
+        org_id="org-1",
+        owner_user_id="user-1",
     )
 
     assert parse_result["status"] == "parsed"
@@ -54,13 +56,13 @@ async def test_full_document_workflow(tmp_path):
         await conn.commit()
 
     query_engine = QueryEngine(db)
-    results = await query_engine.query("encryption")
+    results = await query_engine.query("encryption", org_id="org-1", user_id="user-1")
 
     assert len(results) > 0
     assert "AES-256" in results[0]["statement"]
 
     # Step 4: Export
-    exporter = AssessmentExporter(db)
+    exporter = AssessmentExporter(db, org_id="org-1", user_id="user-1")
     export_path = tmp_path / "export.json"
     await exporter.export_json(export_path)
 

@@ -1,121 +1,67 @@
-"""HTTP/SSE Server for Document-Logic MCP.
-
-Provides HTTP endpoints for document processing tools to integrate with Ansvar platform.
-"""
+"""HTTP/SSE server for Document-Logic MCP."""
 
 import asyncio
+import base64
 import logging
 import os
+import tempfile
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Security, Depends, APIRouter
+from typing import Any, Dict, Literal
+
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
-from .tools import (
-    parse_document_tool, extract_document_tool, list_documents_tool,
-    get_document_tool, delete_document_tool,
-    resolve_technology_name_tool, suggest_terminology_addition_tool,
-)
 from .database import Database
+from .export import AssessmentExporter
+from .query import QueryEngine
+from .tools import (
+    MAX_FILE_SIZE,
+    _load_document_for_access,
+    delete_document_tool,
+    extract_document_tool,
+    get_document_tool,
+    list_documents_tool,
+    parse_document_tool,
+    resolve_technology_name_tool,
+    suggest_terminology_addition_tool,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Authentication ---
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+DB_PATH = Path(os.getenv("DB_PATH", "data/assessment.db"))
+MCP_API_KEY = os.getenv("MCP_API_KEY", "").strip()
+MCP_AUTH_DISABLED = os.getenv("MCP_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes"}
+
+# Global database path set during app lifespan.
+db_path: Path | None = None
 
 
-async def verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
-    """Verify API key if MCP_API_KEY is configured. Skip auth if unset (dev mode)."""
-    required_key = os.getenv("MCP_API_KEY")
-    if not required_key:
-        return  # No key configured — allow (dev mode)
-    if api_key != required_key:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
-    return api_key
-
-# Global database path
-db_path: Optional[Path] = None
+@dataclass(slots=True)
+class AccessContext:
+    org_id: str
+    user_id: str | None = None
+    allow_org_write: bool = False
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
-    global db_path
-    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    db = Database(db_path)
-    await db.initialize()
-    logger.info(f"Database initialized at {db_path}")
-
-    yield
-
-
-# Initialize FastAPI app — all endpoints require API key when MCP_API_KEY is set
-app = FastAPI(
-    title="Document-Logic MCP",
-    description="Structured document intelligence extraction with citations",
-    version="0.1.0",
-    lifespan=lifespan,
-    dependencies=[Depends(verify_api_key)],
-)
-
-
-# --- Unauthenticated health check (override removes app-level auth dependency) ---
-_health_router = APIRouter(dependencies=[])
-
-
-@_health_router.get("/health")
-async def health_check():
-    """Health check endpoint (no authentication required).
-
-    Returns structured status with DB connectivity, document counts,
-    and version info for orchestrator consumption.
-    """
-    import aiosqlite
-
-    status = "ok"
-    details: Dict[str, Any] = {
-        "server": "document-logic-mcp",
-        "version": "0.1.0",
-    }
-
-    # Check DB connectivity and report stats
-    if db_path and db_path.exists():
-        try:
-            async with aiosqlite.connect(str(db_path)) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(
-                    "SELECT COUNT(*) as cnt FROM documents"
-                )
-                row = await cursor.fetchone()
-                details["documents_count"] = row["cnt"] if row else 0
-                details["db_status"] = "connected"
-        except Exception as e:
-            status = "degraded"
-            details["db_status"] = f"error: {type(e).__name__}"
-    else:
-        details["db_status"] = "not_initialized"
-
-    details["status"] = status
-    return details
-
-
-app.include_router(_health_router)
-
-
-# Request models
 class ParseDocumentRequest(BaseModel):
     file_path: str = Field(..., description="Absolute path to document file")
+    scope: Literal["conversation", "organization"] = Field(
+        "conversation",
+        description="Storage scope for the document",
+    )
 
 
 class ParseContentRequest(BaseModel):
     filename: str = Field(..., description="Original filename (with extension)")
     content: str = Field(..., description="Base64-encoded file content")
+    scope: Literal["conversation", "organization"] = Field(
+        "conversation",
+        description="Storage scope for the document",
+    )
 
 
 class ExtractDocumentRequest(BaseModel):
@@ -129,7 +75,7 @@ class ExtractDocumentRequest(BaseModel):
             "cross-section synthesis (Pass 3: component registry, trust boundaries, "
             "implicit negatives, ambiguity flags). "
             "Available: 'stride_threat_modeling', 'tprm_vendor_assessment', 'compliance_mapping'"
-        )
+        ),
     )
 
 
@@ -144,138 +90,253 @@ class EntityAliasesRequest(BaseModel):
 
 
 class ResolveTechnologyNameRequest(BaseModel):
-    raw_name: str = Field(..., description="Raw technology string from source document (e.g., 'ELK Stack', 'PostgreSQL 15.3', 'Azure AD')")
+    raw_name: str = Field(
+        ...,
+        description="Raw technology string from source document (e.g., 'ELK Stack', 'PostgreSQL 15.3', 'Azure AD')",
+    )
 
 
 class SuggestTerminologyAdditionRequest(BaseModel):
     raw_string: str = Field(..., description="The unresolved technology string from the source document")
-    resolved_canonical: str | None = Field(None, description="What the agent resolved it to via semantic dedup")
+    resolved_canonical: str | None = Field(
+        None,
+        description="What the agent resolved it to via semantic dedup",
+    )
     context: str | None = Field(None, description="Snippet from the source document providing usage context")
 
 
 class ExportAssessmentRequest(BaseModel):
-    format: str = Field("json", description="Export format: json, sqlite, or markdown")
+    format: Literal["json", "sqlite", "markdown"] = Field(
+        "json",
+        description="Export format: json, sqlite, or markdown",
+    )
     output_path: str = Field(..., description="Absolute path to save the export file")
 
 
-# Parse document endpoint
+def _header_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
+def require_access_context(
+    x_org_id: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    x_allow_org_write: str | None = Header(default=None),
+) -> AccessContext:
+    if not MCP_AUTH_DISABLED:
+        if not MCP_API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="MCP_API_KEY is not configured.",
+            )
+        if x_api_key != MCP_API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid MCP API key.",
+            )
+
+    if x_org_id is None or not x_org_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Org-Id header is required.",
+        )
+
+    user_id = x_user_id.strip() if x_user_id and x_user_id.strip() else None
+    return AccessContext(
+        org_id=x_org_id.strip(),
+        user_id=user_id,
+        allow_org_write=_header_truthy(x_allow_org_write),
+    )
+
+
+def _require_parse_identity(scope: str, access: AccessContext) -> None:
+    if scope == "conversation" and not access.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-User-Id header is required for conversation-scoped documents.",
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database on startup."""
+    del app
+
+    global db_path
+    db_path = DB_PATH
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db = Database(db_path)
+    await db.initialize()
+    logger.info("Database initialized at %s", db_path)
+
+    yield
+
+
+app = FastAPI(
+    title="Document-Logic MCP",
+    description="Structured document intelligence extraction with citations",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint (no authentication required)."""
+    import aiosqlite
+
+    status_label = "ok"
+    details: Dict[str, Any] = {
+        "server": "document-logic-mcp",
+        "version": "0.1.0",
+    }
+
+    if db_path and db_path.exists():
+        try:
+            async with aiosqlite.connect(str(db_path)) as conn:
+                conn.row_factory = aiosqlite.Row
+                cursor = await conn.execute("SELECT COUNT(*) as cnt FROM documents")
+                row = await cursor.fetchone()
+                details["documents_count"] = row["cnt"] if row else 0
+                details["db_status"] = "connected"
+        except Exception as exc:
+            status_label = "degraded"
+            details["db_status"] = f"error: {type(exc).__name__}"
+    else:
+        details["db_status"] = "not_initialized"
+
+    details["status"] = status_label
+    return details
+
+
 @app.post("/parse")
-async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
+async def parse_document(
+    request: ParseDocumentRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
     """Parse a document and extract structure."""
     try:
-        result = await parse_document_tool(
+        _require_parse_identity(request.scope, access)
+        return await parse_document_tool(
             file_path=request.file_path,
-            db_path=db_path
+            db_path=db_path,
+            org_id=access.org_id,
+            scope=request.scope,
+            owner_user_id=access.user_id,
+            allow_org_write=access.allow_org_write,
         )
-        return result
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Parse failed: {e}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Parse failed: %s", exc)
         raise HTTPException(status_code=500, detail="Document parsing failed")
 
 
-# Parse content endpoint (accepts base64-encoded content instead of file path)
 @app.post("/parse-content")
-async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
+async def parse_content(
+    request: ParseContentRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
     """Parse document content and extract structure (no filesystem access needed)."""
-    import base64
-    import tempfile
-
     try:
-        # Decode base64 content
+        _require_parse_identity(request.scope, access)
         file_content = base64.b64decode(request.content)
-
-        # File size check
-        from .tools import MAX_FILE_SIZE
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"File too large: {len(file_content) / (1024*1024):.1f} MB "
-                       f"(max {MAX_FILE_SIZE / (1024*1024):.0f} MB)",
+                detail=(
+                    f"File too large: {len(file_content) / (1024 * 1024):.1f} MB "
+                    f"(max {MAX_FILE_SIZE / (1024 * 1024):.0f} MB)"
+                ),
             )
 
-        # Write to temporary file for parsing
         with tempfile.NamedTemporaryFile(delete=False, suffix=Path(request.filename).suffix) as temp_file:
             temp_file.write(file_content)
             temp_path = temp_file.name
 
         try:
-            # Parse using temporary file path
-            result = await parse_document_tool(
+            return await parse_document_tool(
                 file_path=temp_path,
-                db_path=db_path
+                db_path=db_path,
+                org_id=access.org_id,
+                scope=request.scope,
+                owner_user_id=access.user_id,
+                allow_org_write=access.allow_org_write,
+                filename_override=request.filename,
             )
-            # Override filename with original name
-            result["filename"] = request.filename
-            return result
         finally:
-            # Clean up temporary file
             Path(temp_path).unlink(missing_ok=True)
-
     except HTTPException:
         raise
-    except ValueError as e:
-        logger.error(f"Parse content rejected: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Parse content failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Parse failed: {type(e).__name__}: {e}")
+    except PermissionError as exc:
+        logger.error("Parse content rejected: %s", exc)
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        logger.error("Parse content rejected: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Parse content failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Parse failed: {type(exc).__name__}: {exc}")
 
 
-# Extract document endpoint
 @app.post("/extract")
-async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
-    """Extract truths, entities, and relationships from parsed document.
-
-    When analysis_context is provided, also runs a synthesis pass (Pass 3)
-    that produces component registry, trust boundaries, implicit negatives,
-    and ambiguity flags. The synthesis output is returned under the "synthesis" key.
-    """
+async def extract_document(
+    request: ExtractDocumentRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Extract truths, entities, and relationships from a parsed document."""
     try:
-        result = await extract_document_tool(
+        return await extract_document_tool(
             doc_id=request.doc_id,
             db_path=db_path,
             extraction_model=request.model,
             analysis_context=request.analysis_context,
+            org_id=access.org_id,
+            user_id=access.user_id,
+            allow_org_write=access.allow_org_write,
         )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Extract failed: {e}")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("Extract failed: %s", exc)
         raise HTTPException(status_code=500, detail="Document extraction failed")
 
 
-# Async extract endpoint — fire-and-forget, poll via GET /documents/{doc_id}
 @app.post("/extract-async")
-async def extract_document_async(request: ExtractDocumentRequest) -> JSONResponse:
-    """Start extraction as a background task and return immediately.
-
-    Returns HTTP 202 with {"status": "accepted", "doc_id": "..."}.
-    Poll GET /documents/{doc_id} to track progress:
-      - status "extracting" → still running
-      - status "completed"  → done (truths_count, entities_count populated)
-      - status "failed"     → extraction error
-    """
-    import aiosqlite
-
-    # Validate document exists and is in a valid state for extraction
+async def extract_document_async(
+    request: ExtractDocumentRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> JSONResponse:
+    """Start extraction as a background task and return immediately."""
     if not db_path or not db_path.exists():
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    async with aiosqlite.connect(str(db_path)) as conn:
-        conn.row_factory = aiosqlite.Row
-        cursor = await conn.execute(
-            "SELECT status FROM documents WHERE doc_id = ?",
-            (request.doc_id,),
-        )
-        row = await cursor.fetchone()
+    db = Database(db_path)
+    await db.initialize()
 
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Document {request.doc_id} not found")
+    try:
+        async with db.connection() as conn:
+            row = await _load_document_for_access(
+                conn,
+                doc_id=request.doc_id,
+                org_id=access.org_id,
+                user_id=access.user_id,
+                allow_org_write=access.allow_org_write,
+                require_write=True,
+            )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
     doc_status = row["status"]
     if doc_status == "extracting":
@@ -288,10 +349,12 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
             detail=f"Document status is '{doc_status}', expected 'parsed'",
         )
 
-    # Launch extraction as a background asyncio task
     asyncio.create_task(
         _background_extract(
             doc_id=request.doc_id,
+            org_id=access.org_id,
+            user_id=access.user_id,
+            allow_org_write=access.allow_org_write,
             extraction_model=request.model,
             analysis_context=request.analysis_context,
         )
@@ -304,7 +367,11 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
 
 
 async def _background_extract(
+    *,
     doc_id: str,
+    org_id: str,
+    user_id: str | None,
+    allow_org_write: bool,
     extraction_model: str | None,
     analysis_context: str | None,
 ) -> None:
@@ -315,61 +382,89 @@ async def _background_extract(
             db_path=db_path,
             extraction_model=extraction_model,
             analysis_context=analysis_context,
+            org_id=org_id,
+            user_id=user_id,
+            allow_org_write=allow_org_write,
         )
         logger.info("Background extraction completed for %s", doc_id)
     except Exception:
-        # extract_document_tool already sets status to "failed" on error
         logger.exception("Background extraction failed for %s", doc_id)
 
 
-# List documents endpoint
 @app.get("/documents")
-async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
-    """List documents with extraction status and counts. Supports pagination via ?limit=&offset=."""
+async def list_documents(
+    limit: int = 100,
+    offset: int = 0,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """List documents with extraction status and counts."""
     try:
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
-        result = await list_documents_tool(db_path=db_path, limit=limit, offset=offset)
-        return result
-    except Exception as e:
-        logger.error(f"List documents failed: {e}")
+        return await list_documents_tool(
+            db_path=db_path,
+            org_id=access.org_id,
+            user_id=access.user_id,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as exc:
+        logger.error("List documents failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to list documents")
 
 
-# Get document endpoint
 @app.get("/documents/{doc_id}")
-async def get_document(doc_id: str, include_extracted_data: bool = False) -> Dict[str, Any]:
-    """Get document details. Pass ?include_extracted_data=true for full truths/entities/relationships."""
+async def get_document(
+    doc_id: str,
+    include_extracted_data: bool = False,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Get document details."""
     try:
-        result = await get_document_tool(doc_id=doc_id, db_path=db_path, include_extracted_data=include_extracted_data)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Get document failed: {e}")
+        return await get_document_tool(
+            doc_id=doc_id,
+            db_path=db_path,
+            include_extracted_data=include_extracted_data,
+            org_id=access.org_id,
+            user_id=access.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("Get document failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to get document")
 
 
-# Delete document endpoint
 @app.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str) -> Dict[str, Any]:
+async def delete_document(
+    doc_id: str,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
     """Delete a document and all associated extracted data."""
     try:
-        result = await delete_document_tool(doc_id=doc_id, db_path=db_path)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Delete document failed: {e}")
+        return await delete_document_tool(
+            doc_id=doc_id,
+            db_path=db_path,
+            org_id=access.org_id,
+            user_id=access.user_id,
+            allow_org_write=access.allow_org_write,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("Delete document failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to delete document")
 
 
-# Query documents endpoint
 @app.post("/query-documents")
-async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
-    """Query extracted truths with natural language. Returns verified facts with citations."""
+async def query_documents(
+    request: QueryDocumentsRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Query extracted truths with natural language."""
     try:
-        from .query import QueryEngine
         from .embeddings import EmbeddingService
 
         db = Database(db_path)
@@ -381,19 +476,26 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
             embedding_service = None
 
         query_engine = QueryEngine(db, embedding_service=embedding_service)
-        results = await query_engine.query(request.query, doc_ids=request.doc_ids, top_k=request.limit)
+        results = await query_engine.query(
+            request.query,
+            org_id=access.org_id,
+            user_id=access.user_id,
+            doc_ids=request.doc_ids,
+            top_k=request.limit,
+        )
         return {"results": results, "count": len(results)}
-    except Exception as e:
-        logger.error(f"Query failed: {e}")
+    except Exception as exc:
+        logger.error("Query failed: %s", exc)
         raise HTTPException(status_code=500, detail="Query execution failed")
 
 
-# Entity aliases endpoint
 @app.post("/entity-aliases")
-async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
+async def get_entity_aliases(
+    request: EntityAliasesRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
     """Find potential aliases for a named entity."""
     try:
-        from .query import QueryEngine
         from .embeddings import EmbeddingService
 
         db = Database(db_path)
@@ -405,83 +507,84 @@ async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
             embedding_service = None
 
         query_engine = QueryEngine(db, embedding_service=embedding_service)
-        result = await query_engine.get_entity_aliases(request.entity_name)
-        return result
-    except Exception as e:
-        logger.error(f"Entity aliases failed: {e}")
+        return await query_engine.get_entity_aliases(
+            request.entity_name,
+            org_id=access.org_id,
+            user_id=access.user_id,
+        )
+    except Exception as exc:
+        logger.error("Entity aliases failed: %s", exc)
         raise HTTPException(status_code=500, detail="Entity alias lookup failed")
 
 
-# Resolve technology name endpoint
 @app.post("/resolve-technology-name")
-async def resolve_technology_name(request: ResolveTechnologyNameRequest) -> Dict[str, Any]:
-    """Resolve a raw technology string to its canonical name.
+async def resolve_technology_name(
+    request: ResolveTechnologyNameRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Resolve a raw technology string to its canonical name."""
+    del access
 
-    Deterministic normalization using the technology terminology resource.
-    Returns canonical_name, version, match_method (exact/fuzzy), and confidence.
-    Returns null canonical_name when no match or ambiguous.
-    """
     try:
-        result = await resolve_technology_name_tool(raw_name=request.raw_name)
-        return result
-    except Exception as e:
-        logger.error(f"Resolve technology name failed: {e}")
+        return await resolve_technology_name_tool(raw_name=request.raw_name)
+    except Exception as exc:
+        logger.error("Resolve technology name failed: %s", exc)
         raise HTTPException(status_code=500, detail="Technology name resolution failed")
 
 
-# Suggest terminology addition endpoint
 @app.post("/suggest-terminology-addition")
-async def suggest_terminology_addition(request: SuggestTerminologyAdditionRequest) -> Dict[str, Any]:
-    """Queue a terminology addition suggestion for human review.
-
-    Called when an agent merges technology names not in the terminology table.
-    Persists the suggestion for review — does NOT auto-add to the table.
-    """
+async def suggest_terminology_addition(
+    request: SuggestTerminologyAdditionRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Queue a terminology addition suggestion for human review."""
     try:
-        result = await suggest_terminology_addition_tool(
+        return await suggest_terminology_addition_tool(
             raw_string=request.raw_string,
             resolved_canonical=request.resolved_canonical,
             context=request.context,
             db_path=db_path,
+            org_id=access.org_id,
+            user_id=access.user_id,
         )
-        return result
-    except Exception as e:
-        logger.error(f"Suggest terminology addition failed: {e}")
+    except Exception as exc:
+        logger.error("Suggest terminology addition failed: %s", exc)
         raise HTTPException(status_code=500, detail="Terminology suggestion failed")
 
 
-# Export assessment endpoint
 @app.post("/export")
-async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
-    """Export all extracted data as a deliverable file."""
+async def export_assessment(
+    request: ExportAssessmentRequest,
+    access: AccessContext = Depends(require_access_context),
+) -> Dict[str, Any]:
+    """Export accessible extracted data as a deliverable file."""
     try:
-        from .export import AssessmentExporter
-
         db = Database(db_path)
         await db.initialize()
-        exporter = AssessmentExporter(db)
+        exporter = AssessmentExporter(
+            db,
+            org_id=access.org_id,
+            user_id=access.user_id,
+        )
 
-        format_type = request.format
         output_path = Path(request.output_path)
-
-        if format_type == "json":
+        if request.format == "json":
             result_path = await exporter.export_json(output_path)
-        elif format_type == "sqlite":
+        elif request.format == "sqlite":
             result_path = await exporter.export_sqlite(output_path)
-        elif format_type == "markdown":
-            result_path = await exporter.export_markdown(output_path)
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown format: {format_type}")
+            result_path = await exporter.export_markdown(output_path)
 
-        return {"exported_to": str(result_path), "format": format_type}
+        return {"exported_to": str(result_path), "format": request.format}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Export failed: {e}")
+    except Exception as exc:
+        logger.error("Export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Export failed")
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", 3000))
     uvicorn.run(app, host="0.0.0.0", port=port)

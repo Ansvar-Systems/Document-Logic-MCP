@@ -18,9 +18,9 @@ See CONTEXT_SUPPLEMENTS in prompts.py for available contexts:
 import logging
 import os
 import uuid
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 from .database import Database
 from .parsers import (
     PDFParser, DOCXParser, JSONParser,
@@ -39,6 +39,7 @@ MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_MB", "50")) * 1024 * 1024
 # Allowed directories for file access (colon-separated). Empty = allow all (dev mode).
 _allowed_dirs_raw = os.getenv("ALLOWED_DOC_DIRS", "")
 ALLOWED_DOC_DIRS = [Path(p).resolve() for p in _allowed_dirs_raw.split(":") if p.strip()] if _allowed_dirs_raw else []
+VALID_SCOPES = {"conversation", "organization"}
 
 
 def _validate_file_path(file_path: Path) -> None:
@@ -69,13 +70,107 @@ def _validate_file_path(file_path: Path) -> None:
         )
 
 
-async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
+def _normalize_scope(scope: str | None) -> str:
+    candidate = (scope or "conversation").strip().lower()
+    if candidate not in VALID_SCOPES:
+        raise ValueError(
+            f"Invalid scope '{scope}'. Must be one of: {', '.join(sorted(VALID_SCOPES))}"
+        )
+    return candidate
+
+
+def _normalize_user_id(user_id: str | None) -> str | None:
+    if user_id is None:
+        return None
+    candidate = user_id.strip()
+    return candidate or None
+
+
+def _document_access_clause(alias: str, org_id: str, user_id: str | None) -> tuple[str, list[Any]]:
+    clause = f"{alias}.org_id = ? AND ({alias}.scope = 'organization'"
+    params: list[Any] = [org_id]
+    if user_id:
+        clause += f" OR ({alias}.scope = 'conversation' AND {alias}.owner_user_id = ?)"
+        params.append(user_id)
+    clause += ")"
+    return clause, params
+
+
+def _require_org_write(scope: str, allow_org_write: bool) -> None:
+    if scope == "organization" and not allow_org_write:
+        raise PermissionError("Organization-scoped writes require allow_org_write=true.")
+
+
+def _normalize_owner_user_id(scope: str, owner_user_id: str | None) -> str | None:
+    normalized = _normalize_user_id(owner_user_id)
+    if scope == "conversation" and normalized is None:
+        raise ValueError("owner_user_id is required for conversation-scoped documents.")
+    return normalized
+
+
+async def _load_document_for_access(
+    conn,
+    *,
+    doc_id: str,
+    org_id: str,
+    user_id: str | None = None,
+    allow_org_write: bool = False,
+    require_write: bool = False,
+):
+    cursor = await conn.execute(
+        """
+        SELECT
+            doc_id,
+            org_id,
+            owner_user_id,
+            scope,
+            filename,
+            raw_text,
+            sections_count,
+            page_count,
+            status,
+            upload_date,
+            metadata
+        FROM documents
+        WHERE doc_id = ? AND org_id = ?
+        """,
+        (doc_id, org_id),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        raise ValueError(f"Document {doc_id} not found")
+
+    scope = _normalize_scope(row["scope"])
+    owner_user_id = _normalize_user_id(row["owner_user_id"])
+    if scope == "conversation":
+        if owner_user_id is None or owner_user_id != _normalize_user_id(user_id):
+            raise ValueError(f"Document {doc_id} not found")
+    elif require_write:
+        _require_org_write(scope, allow_org_write)
+
+    return row
+
+
+async def parse_document_tool(
+    file_path: str,
+    db_path: Path,
+    *,
+    org_id: str,
+    scope: str = "conversation",
+    owner_user_id: str | None = None,
+    allow_org_write: bool = False,
+    filename_override: str | None = None,
+) -> Dict[str, Any]:
     """
     Parse a document and store metadata.
 
     Fast (seconds), deterministic parsing of document structure.
     Returns document ID for use in extract_document.
     """
+    normalized_scope = _normalize_scope(scope)
+    normalized_owner_user_id = _normalize_owner_user_id(normalized_scope, owner_user_id)
+    _require_org_write(normalized_scope, allow_org_write)
+
     file_path = Path(file_path)
     _validate_file_path(file_path)
 
@@ -120,13 +215,20 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
         # Store document metadata
         import json
         metadata_json = json.dumps(parse_result.metadata) if parse_result.metadata else None
+        stored_filename = filename_override or parse_result.filename
 
         await conn.execute("""
-            INSERT INTO documents (doc_id, filename, upload_date, sections_count, page_count, status, raw_text, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (
+                doc_id, org_id, owner_user_id, scope, filename, upload_date,
+                sections_count, page_count, status, raw_text, metadata
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             doc_id,
-            parse_result.filename,
+            org_id,
+            normalized_owner_user_id,
+            normalized_scope,
+            stored_filename,
             datetime.now().isoformat(),
             len(parse_result.sections),
             parse_result.page_count,
@@ -156,7 +258,7 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
 
     return {
         "doc_id": doc_id,
-        "filename": parse_result.filename,
+        "filename": stored_filename,
         "sections_count": len(parse_result.sections),
         "page_count": parse_result.page_count,
         "status": "parsed",
@@ -169,6 +271,10 @@ async def extract_document_tool(
     db_path: Path,
     extraction_model: str | None = None,
     analysis_context: Optional[str] = None,
+    *,
+    org_id: str,
+    user_id: str | None = None,
+    allow_org_write: bool = False,
 ) -> Dict[str, Any]:
     """
     Extract truths, entities, and relationships from parsed document.
@@ -194,15 +300,16 @@ async def extract_document_tool(
     await db.initialize()
 
     # Get parsed document
+    normalized_user_id = _normalize_user_id(user_id)
     async with db.connection() as conn:
-        cursor = await conn.execute(
-            "SELECT filename, raw_text, sections_count, page_count FROM documents WHERE doc_id = ?",
-            (doc_id,)
+        row = await _load_document_for_access(
+            conn,
+            doc_id=doc_id,
+            org_id=org_id,
+            user_id=normalized_user_id,
+            allow_org_write=allow_org_write,
+            require_write=True,
         )
-        row = await cursor.fetchone()
-
-        if not row:
-            raise ValueError(f"Document {doc_id} not found")
 
         filename = row["filename"]
         raw_text = row["raw_text"]
@@ -563,7 +670,14 @@ async def _run_extraction_pipeline(
     return result
 
 
-async def list_documents_tool(db_path: Path, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+async def list_documents_tool(
+    db_path: Path,
+    *,
+    org_id: str,
+    user_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> Dict[str, Any]:
     """
     List documents in the database with extraction status and counts.
 
@@ -573,12 +687,16 @@ async def list_documents_tool(db_path: Path, limit: int = 100, offset: int = 0) 
     db = Database(db_path)
     await db.initialize()
 
+    access_clause, access_params = _document_access_clause("d", org_id, _normalize_user_id(user_id))
     async with db.connection() as conn:
         # Get total count
-        count_cursor = await conn.execute("SELECT COUNT(*) as cnt FROM documents")
+        count_cursor = await conn.execute(
+            f"SELECT COUNT(*) as cnt FROM documents d WHERE {access_clause}",
+            access_params,
+        )
         total = (await count_cursor.fetchone())["cnt"]
 
-        cursor = await conn.execute("""
+        cursor = await conn.execute(f"""
             SELECT d.doc_id, d.filename, d.status, d.upload_date, d.sections_count,
                    COUNT(DISTINCT t.truth_id) as truths_count,
                    COUNT(DISTINCT e.entity_id) as entities_count,
@@ -587,17 +705,25 @@ async def list_documents_tool(db_path: Path, limit: int = 100, offset: int = 0) 
             LEFT JOIN truths t ON d.doc_id = t.doc_id
             LEFT JOIN entities e ON d.doc_id = e.doc_id
             LEFT JOIN relationships r ON d.doc_id = r.source_doc_id
+            WHERE {access_clause}
             GROUP BY d.doc_id
             ORDER BY d.upload_date DESC
             LIMIT ? OFFSET ?
-        """, (limit, offset))
+        """, [*access_params, limit, offset])
         rows = await cursor.fetchall()
         documents = [dict(row) for row in rows]
 
     return {"documents": documents, "count": len(documents), "total": total}
 
 
-async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: bool = False) -> Dict[str, Any]:
+async def get_document_tool(
+    doc_id: str,
+    db_path: Path,
+    include_extracted_data: bool = False,
+    *,
+    org_id: str,
+    user_id: str | None = None,
+) -> Dict[str, Any]:
     """
     Get full document details including all extracted data.
 
@@ -609,14 +735,12 @@ async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: 
 
     async with db.connection() as conn:
         # Fetch document metadata
-        cursor = await conn.execute(
-            "SELECT doc_id, filename, status, upload_date, sections_count, raw_text, metadata FROM documents WHERE doc_id = ?",
-            (doc_id,)
+        doc_row = await _load_document_for_access(
+            conn,
+            doc_id=doc_id,
+            org_id=org_id,
+            user_id=_normalize_user_id(user_id),
         )
-        doc_row = await cursor.fetchone()
-
-        if not doc_row:
-            raise ValueError(f"Document {doc_id} not found")
 
         result = dict(doc_row)
 
@@ -713,7 +837,14 @@ async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: 
     return result
 
 
-async def delete_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
+async def delete_document_tool(
+    doc_id: str,
+    db_path: Path,
+    *,
+    org_id: str,
+    user_id: str | None = None,
+    allow_org_write: bool = False,
+) -> Dict[str, Any]:
     """
     Delete a document and all associated extracted data.
 
@@ -725,13 +856,14 @@ async def delete_document_tool(doc_id: str, db_path: Path) -> Dict[str, Any]:
 
     async with db.connection() as conn:
         # Verify document exists
-        cursor = await conn.execute(
-            "SELECT doc_id, filename FROM documents WHERE doc_id = ?",
-            (doc_id,)
+        row = await _load_document_for_access(
+            conn,
+            doc_id=doc_id,
+            org_id=org_id,
+            user_id=_normalize_user_id(user_id),
+            allow_org_write=allow_org_write,
+            require_write=True,
         )
-        row = await cursor.fetchone()
-        if not row:
-            raise ValueError(f"Document {doc_id} not found")
 
         filename = row["filename"]
 
@@ -820,6 +952,8 @@ async def suggest_terminology_addition_tool(
     resolved_canonical: str | None = None,
     context: str | None = None,
     db_path: Path | None = None,
+    org_id: str | None = None,
+    user_id: str | None = None,
 ) -> Dict[str, Any]:
     """
     Queue a terminology addition suggestion for human review.
@@ -852,6 +986,8 @@ async def suggest_terminology_addition_tool(
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS terminology_suggestions (
                     suggestion_id TEXT PRIMARY KEY,
+                    org_id TEXT,
+                    user_id TEXT,
                     raw_string TEXT NOT NULL,
                     resolved_canonical TEXT,
                     context TEXT,
@@ -861,13 +997,25 @@ async def suggest_terminology_addition_tool(
                     reviewer_action TEXT
                 )
             """)
+            for column_name, column_sql in (
+                ("org_id", "TEXT"),
+                ("user_id", "TEXT"),
+            ):
+                try:
+                    await conn.execute(
+                        f"ALTER TABLE terminology_suggestions ADD COLUMN {column_name} {column_sql}"
+                    )
+                except Exception:
+                    pass
             suggestion_id = str(uuid.uuid4())
             await conn.execute("""
                 INSERT OR IGNORE INTO terminology_suggestions
-                    (suggestion_id, raw_string, resolved_canonical, context, status, created_at)
-                VALUES (?, ?, ?, ?, 'pending_review', ?)
+                    (suggestion_id, org_id, user_id, raw_string, resolved_canonical, context, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?)
             """, (
                 suggestion_id,
+                org_id,
+                _normalize_user_id(user_id),
                 raw_string,
                 resolved_canonical,
                 context,

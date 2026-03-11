@@ -1,36 +1,27 @@
 # Privacy Policy
 
-## Data Collection
+## Data Handling
 
-**This MCP server collects no data.**
+This service stores uploaded document content and extracted facts in its SQLite database.
 
-- No user data is stored
-- No telemetry is sent
-- No tracking or analytics
-- No cookies or session data
-- No network calls at runtime
+Persisted data can include:
 
-## Architecture
+- original filenames
+- raw parsed document text until extraction completes
+- extracted truths, entities, and relationships
+- tenant metadata (`org_id`, scope, owner user for conversation-scoped docs)
 
-This MCP server is a **read-only knowledge base**. It serves pre-built data from a local SQLite database. No user queries, inputs, or interactions are logged or persisted by the MCP server itself.
+## Isolation Model
 
-## Data Sources
+- Data is partitioned by `org_id`
+- Conversation-scoped data is restricted to the owning user
+- Organization-scoped data is readable within the org and writable only with explicit org-write authorization
+- Exports are filtered to the caller's visible data set
 
-All data in this knowledge base is sourced from **publicly available** Document Logic Mcp government and legislative publications.
+## Telemetry
 
-## Host Environment
+This repository does not intentionally add external analytics or tracking. Host applications and surrounding platform services may have their own logging and audit behavior.
 
-When this MCP server runs inside a host application (Claude Desktop, Cursor, VS Code, etc.), the **host application's** privacy policy governs how your interactions are processed. This MCP server itself has no visibility into or control over the host's data practices.
+## Operational Note
 
-## npm Package
-
-The published npm package contains only:
-- Static SQLite database (legislation text)
-- Server code (TypeScript/JavaScript)
-- Configuration files
-
-No user data is included in or collected by the package.
-
-## Contact
-
-For privacy questions about this MCP server: [Ansvar Systems](https://ansvar.eu)
+Because this service processes customer documents, deployments should be treated as customer-data systems for retention, backup, and access-control policy.

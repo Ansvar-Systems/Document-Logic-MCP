@@ -2,29 +2,33 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.x     | :white_check_mark: |
+| Version | Supported |
+| --- | --- |
+| 1.x | Yes |
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this MCP server, please report it responsibly:
-
-1. **Do NOT open a public issue**
-2. Email: security@ansvar.eu
-3. Include: description, reproduction steps, potential impact
-
-We aim to acknowledge reports within 48 hours and provide a fix within 7 days for critical issues.
+1. Do not open a public issue.
+2. Email `security@ansvar.eu`.
+3. Include impact, reproduction steps, and affected deployment path.
 
 ## Security Architecture
 
-- **Read-only**: No write operations to the database
-- **No network calls**: All data served from local SQLite
-- **No authentication**: Public reference data only
-- **No secrets**: No API keys or credentials required
-- **Input validation**: All inputs sanitized before database queries
-- **SQL injection prevention**: Parameterized queries throughout
+This service processes uploaded customer documents. It is not public reference data.
 
-## Dependencies
+Current controls:
 
-Dependencies are monitored via GitHub Dependabot and updated regularly. Security scanning is enabled via GitHub Advanced Security (CodeQL + secret scanning).
+- HTTP authentication with `X-API-Key` unless explicitly disabled for local development
+- Required tenant headers (`X-Org-Id`, `X-User-Id` where applicable)
+- Conversation-vs-organization scope enforcement on reads and writes
+- Explicit `X-Allow-Org-Write` gate for organization-scoped mutations
+- Parameterized SQL throughout
+- File-size and allowed-directory validation on parse paths
+- Filtered exports instead of raw database copies
+
+Operational requirements:
+
+- Bind the service to trusted internal networks only
+- Rotate `MCP_API_KEY` like any other service credential
+- Do not run `MCP_AUTH_DISABLED=true` outside local development
+- Treat the SQLite database as customer data at rest

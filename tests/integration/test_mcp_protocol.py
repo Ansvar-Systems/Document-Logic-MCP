@@ -88,6 +88,16 @@ class TestToolListing:
                 f"Tool '{tool.name}' inputSchema type must be 'object'"
             )
 
+    @pytest.mark.asyncio
+    async def test_parse_document_schema_requires_explicit_scope(self, server):
+        """Schema must not validate conversation-scope requests without an owner."""
+        tools = await _list_tools(server)
+        parse_tool = next(tool for tool in tools if tool.name == "parse_document")
+        schema = parse_tool.inputSchema
+        assert "scope" in schema.get("required", [])
+        assert schema.get("allOf"), "parse_document schema must declare conditional requirements"
+        assert schema["allOf"][0]["then"]["required"] == ["owner_user_id"]
+
 
 class TestToolInvocation:
     """Verify tools/call returns structured responses and errors."""
@@ -106,7 +116,7 @@ class TestToolInvocation:
         """list_documents should return valid JSON with documents array."""
         db_path = tmp_path / "test.db"
         with patch("document_logic_mcp.server.DEFAULT_DB_PATH", db_path):
-            result = await _call_tool(server, "list_documents", {})
+            result = await _call_tool(server, "list_documents", {"org_id": "org-1"})
         assert result.isError is not True
         data = json.loads(result.content[0].text)
         assert "documents" in data
@@ -118,7 +128,10 @@ class TestToolInvocation:
         db_path = tmp_path / "test.db"
         with patch("document_logic_mcp.server.DEFAULT_DB_PATH", db_path):
             result = await _call_tool(server, "parse_document", {
-                "file_path": "/nonexistent/path/doc.pdf"
+                "file_path": "/nonexistent/path/doc.pdf",
+                "org_id": "org-1",
+                "scope": "conversation",
+                "owner_user_id": "user-1",
             })
         assert result.isError is True
         error_data = json.loads(result.content[0].text)
