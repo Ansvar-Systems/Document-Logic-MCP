@@ -54,6 +54,8 @@ _MAX_ALLCAPS_WORDS = 8          # Match PDF parser heuristic
 _MIN_FONT_DELTA_PT = 2.0        # Minimum pt difference vs body text
 _BOLD_MAJORITY_THRESHOLD = 0.5  # Fraction of chars that must be bold
 
+_TOC_ENTRY_RE = re.compile(r'^\s*\d+(?:\.\d+)*\.?\s+(.+?)\s+(\d+)\s*$')
+
 
 def _compute_body_font_size(doc) -> Optional[float]:
     """Compute the weighted median font size of body text paragraphs.
@@ -265,6 +267,22 @@ def _estimate_page(paragraph_index: int, paragraphs_per_page: int = 40) -> int:
       page number is a secondary reference that helps orient the reader.
     """
     return (paragraph_index // paragraphs_per_page) + 1
+
+
+def _normalize_heading_text(text: str) -> str:
+    """Collapse whitespace so heading comparisons survive DOCX formatting quirks."""
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _parse_toc_entry(text: str) -> tuple[str, int] | None:
+    """Parse a DOCX-generated table-of-contents line into (title, page)."""
+    match = _TOC_ENTRY_RE.match(_normalize_heading_text(text))
+    if not match:
+        return None
+    title = _normalize_heading_text(match.group(1))
+    if not title or len(title) > _MAX_HEADING_LENGTH:
+        return None
+    return title, int(match.group(2))
 
 
 class DOCXParser(BaseParser):
@@ -479,6 +497,10 @@ class DOCXParser(BaseParser):
             ))
             detection_method = "single"
 
+        sections, refined = self._refine_sections_from_toc(sections)
+        if refined:
+            detection_method = f"{detection_method}+toc"
+
         max_page = page_map[-1] if page_map else (
             _estimate_page(paragraph_index - 1) if paragraph_index else 1
         )
@@ -496,6 +518,111 @@ class DOCXParser(BaseParser):
                 "page_source": "explicit_breaks" if has_page_breaks else "estimated",
             }
         )
+
+    def _refine_sections_from_toc(
+        self,
+        sections: List[Section],
+    ) -> tuple[List[Section], bool]:
+        """Split oversized DOCX sections using table-of-contents entries.
+
+        Some Word documents use heading styles for front matter only, then place
+        the actual body under a single heading such as "INHOUDSOPGAVE". When a
+        section starts with a TOC block, use those TOC titles to split the body
+        back into canonical sections.
+        """
+        refined_sections: list[Section] = []
+        refined_any = False
+
+        for section in sections:
+            split_sections = self._split_section_using_toc(section)
+            if len(split_sections) > 1:
+                refined_any = True
+            refined_sections.extend(split_sections)
+
+        return refined_sections, refined_any
+
+    def _split_section_using_toc(self, section: Section) -> List[Section]:
+        """Split a section when it contains an embedded table of contents."""
+        lines = [line.strip() for line in section.content.splitlines() if line.strip()]
+        if len(lines) < 4:
+            return [section]
+
+        toc_entries: list[tuple[str, int]] = []
+        body_start = 0
+        for idx, line in enumerate(lines):
+            entry = _parse_toc_entry(line)
+            if entry is None:
+                body_start = idx
+                break
+            toc_entries.append(entry)
+        else:
+            body_start = len(lines)
+
+        if len(toc_entries) < 3 or body_start >= len(lines):
+            return [section]
+
+        title_to_page: dict[str, int] = {}
+        for title, page in toc_entries:
+            title_to_page.setdefault(title, page)
+
+        toc_content = lines[:body_start]
+        body_lines = lines[body_start:]
+        split_body: list[Section] = []
+        current_title: str | None = None
+        current_content: list[str] = []
+        current_page = section.page_start
+        preface_lines: list[str] = []
+
+        for line in body_lines:
+            normalized_line = _normalize_heading_text(line)
+            if normalized_line in title_to_page:
+                if current_title is not None:
+                    split_body.append(Section(
+                        title=current_title,
+                        content="\n".join(current_content).strip(),
+                        page_start=current_page,
+                    ))
+                current_title = normalized_line
+                current_content = []
+                current_page = title_to_page.get(normalized_line, section.page_start or 1)
+                continue
+
+            if current_title is None:
+                preface_lines.append(line)
+            else:
+                current_content.append(line)
+
+        if current_title is None:
+            return [section]
+
+        split_body.append(Section(
+            title=current_title,
+            content="\n".join(current_content).strip(),
+            page_start=current_page,
+        ))
+
+        if not any(s.content for s in split_body):
+            return [section]
+
+        refined_sections: list[Section] = []
+        toc_lines = list(toc_content)
+        if preface_lines:
+            toc_lines.extend(preface_lines)
+        if toc_lines:
+            refined_sections.append(Section(
+                title=section.title,
+                content="\n".join(toc_lines).strip(),
+                page_start=section.page_start,
+                page_end=section.page_end,
+            ))
+        refined_sections.extend(split_body)
+
+        logger.info(
+            "Refined DOCX section '%s' into %d sections using TOC entries",
+            section.title,
+            len(refined_sections),
+        )
+        return refined_sections
 
     def _parse_with_formatting(
         self, doc, page_map: List[int]

@@ -338,10 +338,19 @@ async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
 
 # Get document endpoint
 @app.get("/documents/{doc_id}")
-async def get_document(doc_id: str, include_extracted_data: bool = False) -> Dict[str, Any]:
-    """Get document details. Pass ?include_extracted_data=true for full truths/entities/relationships."""
+async def get_document(
+    doc_id: str,
+    include_extracted_data: bool = False,
+    include_sections: bool = False,
+) -> Dict[str, Any]:
+    """Get document details. Pass include_sections and/or include_extracted_data for full content."""
     try:
-        result = await get_document_tool(doc_id=doc_id, db_path=db_path, include_extracted_data=include_extracted_data)
+        result = await get_document_tool(
+            doc_id=doc_id,
+            db_path=db_path,
+            include_extracted_data=include_extracted_data,
+            include_sections=include_sections,
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

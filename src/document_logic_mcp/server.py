@@ -148,12 +148,15 @@ def create_server() -> Server:
                 name="get_document",
                 description=(
                     "Get details for a single document. By default returns metadata + counts only "
-                    "(lightweight). Set include_extracted_data=true to also return all truths, "
-                    "entities, and relationships (can be large — prefer query_documents for targeted search). "
+                    "(lightweight). Set include_sections=true to also return canonical source sections. "
+                    "Set include_extracted_data=true to also return all truths, entities, and "
+                    "relationships (can be large — prefer query_documents for targeted search). "
                     "Use this to: check extraction status, get document metadata, or retrieve full "
                     "extraction results for a specific document. "
                     "Returns: {doc_id, filename, status, upload_date, sections_count, metadata, "
                     "truths_count, entities_count, relationships_count}. "
+                    "With include_sections=true, also includes: "
+                    "sections: [{section_ref, title, content, section_index, page_start, page_end, parent_ref}]. "
                     "With include_extracted_data=true, also includes: "
                     "truths: [{truth_id, statement, source_section, source_page, source_paragraph, "
                     "statement_type, confidence, source_authority, related_entities}], "
@@ -175,6 +178,14 @@ def create_server() -> Server:
                                 "If true, include full truths/entities/relationships arrays. "
                                 "Default false (metadata + counts only). Set true only when you "
                                 "need the complete extraction output."
+                            ),
+                            "default": False,
+                        },
+                        "include_sections": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, include the parsed source sections in original order. "
+                                "Default false."
                             ),
                             "default": False,
                         },
@@ -438,10 +449,12 @@ def create_server() -> Server:
         elif name == "get_document":
             doc_id = _require_str(arguments, "doc_id", max_length=200)
             include_extracted = bool(arguments.get("include_extracted_data", False))
+            include_sections = bool(arguments.get("include_sections", False))
             result = await get_document_tool(
                 doc_id=doc_id,
                 db_path=DEFAULT_DB_PATH,
                 include_extracted_data=include_extracted,
+                include_sections=include_sections,
             )
             return [TextContent(type="text", text=json.dumps(result))]
 

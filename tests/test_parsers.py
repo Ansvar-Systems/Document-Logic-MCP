@@ -312,3 +312,34 @@ class TestFormattingTierOrdering:
         assert len(result.sections) == 1
         assert result.sections[0].title == "Document"
         assert result.metadata["section_detection"] == "single"
+
+
+class TestDocxTocRefinement:
+    """DOCX TOC refinement should split giant style-based sections."""
+
+    def test_toc_section_is_split_into_body_sections(self):
+        doc = DocxDocument()
+        doc.add_heading("INHOUDSOPGAVE", level=1)
+        doc.add_paragraph("1. Inleiding 1")
+        doc.add_paragraph("2. Logging 2")
+        doc.add_paragraph("3. Monitoring 3")
+        doc.add_paragraph("Inleiding")
+        doc.add_paragraph("Dit document beschrijft de loggingrichtlijn.")
+        doc.add_paragraph("Logging")
+        doc.add_paragraph("Alle productiegebeurtenissen moeten centraal worden gelogd.")
+        doc.add_paragraph("Monitoring")
+        doc.add_paragraph("Monitoring detecteert afwijkingen in real-time.")
+
+        result = _parse_docx(doc)
+
+        assert result.metadata["section_detection"] == "style+toc"
+        assert [section.title for section in result.sections] == [
+            "INHOUDSOPGAVE",
+            "Inleiding",
+            "Logging",
+            "Monitoring",
+        ]
+        assert "1. Inleiding 1" in result.sections[0].content
+        assert "Dit document beschrijft de loggingrichtlijn." in result.sections[1].content
+        assert "centraal worden gelogd" in result.sections[2].content
+        assert result.sections[2].page_start == 2

@@ -139,8 +139,10 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
         for idx, section in enumerate(parse_result.sections):
             section_id = str(uuid.uuid4())
             await conn.execute("""
-                INSERT INTO sections (section_id, doc_id, title, content, section_index, page_start)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO sections (
+                    section_id, doc_id, title, content, section_index, page_start, page_end
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 section_id,
                 doc_id,
@@ -148,6 +150,7 @@ async def parse_document_tool(file_path: str, db_path: Path) -> Dict[str, Any]:
                 section.content,
                 idx,
                 section.page_start,
+                section.page_end,
             ))
 
         await conn.commit()
@@ -210,7 +213,12 @@ async def extract_document_tool(
 
         # Retrieve sections (page_start may be NULL for pre-migration data)
         cursor = await conn.execute(
-            "SELECT title, content, page_start FROM sections WHERE doc_id = ? ORDER BY section_index",
+            """
+            SELECT title, content, page_start, page_end
+            FROM sections
+            WHERE doc_id = ?
+            ORDER BY section_index
+            """,
             (doc_id,)
         )
         section_rows = await cursor.fetchall()
@@ -219,9 +227,19 @@ async def extract_document_tool(
                 title=row["title"],
                 content=row["content"],
                 page_start=row["page_start"],
+                page_end=row["page_end"],
             )
             for row in section_rows
         ]
+
+        # Older completed documents may have raw_text cleared. Reconstruct a
+        # usable overview source from the canonical sections when needed.
+        if not raw_text:
+            raw_text = "\n\n".join(
+                "\n".join(part for part in (section.title, section.content) if part).strip()
+                for section in sections
+                if (section.title or section.content)
+            )
 
     logger.info(
         f"Starting extraction for {filename}... "
@@ -494,10 +512,10 @@ async def _run_extraction_pipeline(
                 "analysis_context": analysis_context,
             }
 
-    # Update status and clear raw_text (no longer needed after extraction)
+    # Keep raw_text so completed documents can be re-extracted faithfully.
     async with db.connection() as conn:
         await conn.execute(
-            "UPDATE documents SET status = ?, raw_text = NULL WHERE doc_id = ?",
+            "UPDATE documents SET status = ? WHERE doc_id = ?",
             ("completed", doc_id)
         )
         await conn.commit()
@@ -597,12 +615,17 @@ async def list_documents_tool(db_path: Path, limit: int = 100, offset: int = 0) 
     return {"documents": documents, "count": len(documents), "total": total}
 
 
-async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: bool = False) -> Dict[str, Any]:
+async def get_document_tool(
+    doc_id: str,
+    db_path: Path,
+    include_extracted_data: bool = False,
+    include_sections: bool = False,
+) -> Dict[str, Any]:
     """
     Get full document details including all extracted data.
 
-    Returns metadata + truths, entities, and relationships for a single document.
-    Use to check extraction status or retrieve results for downstream processing.
+    Returns metadata + counts for a single document.
+    Optional sections and extracted data are returned when requested.
     """
     db = Database(db_path)
     await db.initialize()
@@ -644,7 +667,27 @@ async def get_document_tool(doc_id: str, db_path: Path, include_extracted_data: 
         )
         result["relationships_count"] = (await count_cursor.fetchone())["cnt"]
 
-        # Only fetch full data when requested (prevents context window explosion)
+        if include_sections or include_extracted_data:
+            cursor = await conn.execute("""
+                SELECT title, content, section_index, page_start, page_end
+                FROM sections
+                WHERE doc_id = ?
+                ORDER BY section_index
+            """, (doc_id,))
+            result["sections"] = [
+                {
+                    "section_ref": f"section-{row['section_index'] + 1}",
+                    "title": row["title"],
+                    "content": row["content"],
+                    "section_index": row["section_index"],
+                    "page_start": row["page_start"],
+                    "page_end": row["page_end"],
+                    "parent_ref": None,
+                }
+                for row in await cursor.fetchall()
+            ]
+
+        # Only fetch full extracted data when requested (prevents context window explosion)
         if include_extracted_data:
             # Fetch truths
             cursor = await conn.execute("""

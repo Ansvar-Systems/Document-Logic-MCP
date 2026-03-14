@@ -54,6 +54,8 @@ class Database:
                     title TEXT NOT NULL,
                     content TEXT NOT NULL,
                     section_index INTEGER NOT NULL,
+                    page_start INTEGER,
+                    page_end INTEGER,
                     FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
                 )
             """)
@@ -143,6 +145,14 @@ class Database:
             try:
                 await db.execute(
                     "ALTER TABLE sections ADD COLUMN page_start INTEGER"
+                )
+            except Exception:
+                pass  # Column already exists
+
+            # Migrate existing databases: add page_end to sections if missing
+            try:
+                await db.execute(
+                    "ALTER TABLE sections ADD COLUMN page_end INTEGER"
                 )
             except Exception:
                 pass  # Column already exists

@@ -25,6 +25,11 @@ Extract:
 3. Key entities mentioned (systems, technologies, people, organizations, data types)
 4. Document type (architecture, policy, requirement, report, etc.)
 
+Language preservation:
+- Preserve the source document's original language for `purpose`, `topics`, and every entity `context`
+- Do not translate Dutch text into English
+- Keep entity names exactly as written in the source unless normalization is explicitly present in the document
+
 Return JSON:
 {{
   "purpose": "...",
@@ -71,10 +76,14 @@ Extract ALL factual statements from this section. Be comprehensive, not selectiv
 
 For each statement:
 - Extract the exact quote or paraphrase faithfully
+- Preserve the document's original language exactly as written
+- Do not translate, summarize into English, or normalize terminology into another language
+- If the source text is Dutch, the extracted statement must stay Dutch
 - Classify statement type based on tense/language
 - Identify related entities (systems, technologies, data, etc.)
 - Estimate confidence (0.0-1.0) - lower if vague or ambiguous
 - Note source location (page, paragraph if available)
+- Keep every entity `context` in the document's original language
 
 **Critical instructions:**
 - Extract EVERY factual statement, not just "important" ones
@@ -118,6 +127,9 @@ Return JSON:
 
 Critical:
 - Use exact quotes from the document for statements
+- Preserve the original language of every extracted statement and evidence string
+- Preserve the original language of entity contexts as well
+- Never translate document content during extraction
 - Don't invent information
 - Lower confidence if ambiguous
 - Statement type must match tense/language used
