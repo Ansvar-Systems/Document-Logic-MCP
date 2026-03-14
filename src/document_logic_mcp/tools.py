@@ -333,10 +333,13 @@ async def _run_extraction_pipeline(
         all_entities.extend(section_extraction.entities)
         all_relationships.extend(section_extraction.relationships)
 
-    # Store all extracted data
-    await storage.store_truths(doc_id, all_truths)
-    await storage.store_entities(doc_id, all_entities)
-    await storage.store_relationships(doc_id, all_relationships)
+        # Store incrementally so poll requests see progress
+        if section_extraction.truths:
+            await storage.store_truths(doc_id, section_extraction.truths)
+        if section_extraction.entities:
+            await storage.store_entities(doc_id, section_extraction.entities)
+        if section_extraction.relationships:
+            await storage.store_relationships(doc_id, section_extraction.relationships)
 
     # Pass 3: Cross-section synthesis (only when analysis_context is provided)
     synthesis_output = None
