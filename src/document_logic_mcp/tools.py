@@ -271,16 +271,25 @@ async def extract_document_tool(
     all_entities = []
     all_relationships = []
 
+    failed_sections: list[str] = []
     for idx, section in enumerate(sections):
         logger.info(f"  Extracting section {idx + 1}/{len(sections)}: {section.title}...")
-        section_extraction = await extractor.extract_section(
-            section_title=section.title,
-            section_content=section.content,
-            doc_context=overview,
-            filename=filename,
-            page=section.page_start,
-            analysis_context=analysis_context,
-        )
+        try:
+            section_extraction = await extractor.extract_section(
+                section_title=section.title,
+                section_content=section.content,
+                doc_context=overview,
+                filename=filename,
+                page=section.page_start,
+                analysis_context=analysis_context,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Section %d/%d '%s' extraction failed, skipping: %s",
+                idx + 1, len(sections), section.title, exc,
+            )
+            failed_sections.append(section.title)
+            continue
 
         all_truths.extend(section_extraction.truths)
         all_entities.extend(section_extraction.entities)
@@ -290,6 +299,12 @@ async def extract_document_tool(
     await storage.store_truths(doc_id, all_truths)
     await storage.store_entities(doc_id, all_entities)
     await storage.store_relationships(doc_id, all_relationships)
+
+    if failed_sections:
+        logger.warning(
+            "Extraction completed with %d/%d sections failed: %s",
+            len(failed_sections), len(sections), failed_sections,
+        )
 
     # Pass 3: Cross-section synthesis (only when analysis_context is provided)
     synthesis_output = None

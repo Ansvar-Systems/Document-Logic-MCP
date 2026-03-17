@@ -144,10 +144,10 @@ class DocumentExtractor:
 
                 message = choices[0].get("message", {})
                 content = message.get("content")
+                finish_reason = choices[0].get("finish_reason", "unknown")
 
                 if not content:
                     # Content is None or empty - log the full response for debugging
-                    finish_reason = choices[0].get("finish_reason", "unknown")
                     logger.error(
                         f"LLM returned empty content. "
                         f"finish_reason={finish_reason}, "
@@ -157,6 +157,13 @@ class DocumentExtractor:
                     raise ValueError(
                         f"LLM returned empty content (finish_reason={finish_reason}). "
                         f"The model may have refused, timed out, or returned tool_calls instead of text."
+                    )
+
+                if finish_reason == "length":
+                    logger.warning(
+                        "LLM response truncated (finish_reason=length, model=%s). "
+                        "Output may contain incomplete JSON.",
+                        data.get("model"),
                     )
 
                 return content
@@ -202,12 +209,67 @@ class DocumentExtractor:
             except json.JSONDecodeError:
                 pass
 
+        # Attempt truncated JSON repair: close open brackets/braces
+        if first_brace != -1:
+            fragment = stripped[first_brace:]
+            repaired = DocumentExtractor._repair_truncated_json(fragment)
+            if repaired is not None:
+                logger.warning("Recovered truncated JSON via bracket repair")
+                return repaired
+
         # Nothing worked - log what we got and raise
         preview = stripped[:200] if len(stripped) > 200 else stripped
         raise ValueError(
             f"Could not extract valid JSON from LLM response. "
             f"Response preview: {preview!r}"
         )
+
+    @staticmethod
+    def _repair_truncated_json(fragment: str) -> Optional[dict]:
+        """Try to repair truncated JSON by closing open brackets and braces.
+
+        Works for common LLM truncation where the response is valid JSON
+        up to the point of truncation (e.g., max_tokens hit mid-array).
+        """
+        # Strip any trailing incomplete string value
+        # e.g., '..."entities": ["ICT ' → '..."entities": ['
+        import re as _re
+        # Remove trailing incomplete string (unmatched quote)
+        cleaned = _re.sub(r',?\s*"[^"]*$', '', fragment)
+        # Remove trailing comma if present
+        cleaned = _re.sub(r',\s*$', '', cleaned)
+
+        # Count open brackets/braces and close them
+        opens = []
+        in_string = False
+        escape_next = False
+        for ch in cleaned:
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ('{', '['):
+                opens.append(ch)
+            elif ch == '}' and opens and opens[-1] == '{':
+                opens.pop()
+            elif ch == ']' and opens and opens[-1] == '[':
+                opens.pop()
+
+        # Close remaining open brackets/braces in reverse order
+        closing = ''.join(']' if o == '[' else '}' for o in reversed(opens))
+        candidate = cleaned + closing
+
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
 
     async def extract_overview(self, parse_result: ParseResult) -> DocumentOverview:
         """Pass 1: Extract high-level document overview."""
