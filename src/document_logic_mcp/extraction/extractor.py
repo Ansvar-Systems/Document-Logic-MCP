@@ -233,11 +233,10 @@ class DocumentExtractor:
         """
         # Strip any trailing incomplete string value
         # e.g., '..."entities": ["ICT ' → '..."entities": ['
-        import re as _re
         # Remove trailing incomplete string (unmatched quote)
-        cleaned = _re.sub(r',?\s*"[^"]*$', '', fragment)
+        cleaned = re.sub(r',?\s*"[^"]*$', '', fragment)
         # Remove trailing comma if present
-        cleaned = _re.sub(r',\s*$', '', cleaned)
+        cleaned = re.sub(r',\s*$', '', cleaned)
 
         # Count open brackets/braces and close them
         opens = []
@@ -348,10 +347,10 @@ class DocumentExtractor:
                     entities=t["entities"],
                     document_name=filename,
                 )
-                for t in result["truths"]
+                for t in result.get("truths", [])
             ],
             entities=[
-                ExtractedEntity(**e) for e in result["entities"]
+                ExtractedEntity(**e) for e in result.get("entities", [])
             ],
             relationships=[
                 ExtractedRelationship(
@@ -365,7 +364,7 @@ class DocumentExtractor:
                     data_transferred=r.get("data_transferred"),
                     protocol_mechanism=r.get("protocol_mechanism"),
                 )
-                for r in result["relationships"]
+                for r in result.get("relationships", [])
             ]
         )
 
