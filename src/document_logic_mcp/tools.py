@@ -356,6 +356,13 @@ async def _run_extraction_pipeline(
             len(failed_sections), len(sections), failed_sections,
         )
 
+    # If ALL sections failed, abort — the document has no useful data
+    if sections and len(failed_sections) == len(sections):
+        raise ValueError(
+            f"All {len(sections)} sections failed extraction. "
+            f"First failure: {failed_sections[0]}"
+        )
+
     # Pass 3: Cross-section synthesis (only when analysis_context is provided)
     synthesis_output = None
     if analysis_context:
