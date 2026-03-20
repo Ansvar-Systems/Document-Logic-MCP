@@ -118,6 +118,11 @@ class ParseContentRequest(BaseModel):
     content: str = Field(..., description="Base64-encoded file content")
 
 
+class ParseFileRequest(BaseModel):
+    object_key: str = Field(..., description="File-service object key (e.g. '{file_id}/{filename}')")
+    filename: str = Field(..., description="Original filename for metadata")
+
+
 class ExtractDocumentRequest(BaseModel):
     doc_id: str = Field(..., description="Document ID from parse_document")
     model: str | None = Field(None, description="Optional LLM model override (e.g., 'ollama/llama3.1')")
@@ -223,6 +228,35 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Parse content failed: {e}")
         raise HTTPException(status_code=500, detail=f"Parse failed: {type(e).__name__}: {e}")
+
+
+SHARED_FILES_PATH = Path(os.getenv("SHARED_FILES_PATH", "/data/uploads"))
+
+
+# Parse file endpoint (resolves object_key via shared filesystem)
+@app.post("/parse-file")
+async def parse_file(request: ParseFileRequest) -> Dict[str, Any]:
+    """Parse a document from the shared filesystem by object_key."""
+    resolved = (SHARED_FILES_PATH / request.object_key).resolve()
+    if not resolved.is_relative_to(SHARED_FILES_PATH.resolve()):
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {request.object_key}")
+
+    try:
+        result = await parse_document_tool(
+            file_path=str(resolved),
+            db_path=db_path,
+        )
+        result["filename"] = request.filename
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Parse-file failed: {e}")
+        raise HTTPException(status_code=500, detail="Document parsing failed")
 
 
 # Extract document endpoint
