@@ -198,6 +198,9 @@ class StatelessExtractRequest(BaseModel):
     )
     schema_version: str = Field(..., description="Caller's schema version (echoed in metadata)")
     input_hash: str = Field(..., description="Content hash of the input (echoed in metadata)")
+    org_id: Optional[str] = Field(
+        None, description="Organisation ID for BYOK model routing (forwarded to LLM gateway)"
+    )
 
 
 # Parse document endpoint
@@ -374,7 +377,10 @@ async def extract_stateless(request: Request, body: StatelessExtractRequest) -> 
         schema_version=body.schema_version,
     )
 
-    extractor = DocumentExtractor(extraction_model_override=body.extraction_model)
+    extractor = DocumentExtractor(
+        extraction_model_override=body.extraction_model,
+        org_id=body.org_id,
+    )
 
     try:
         output: ExtractionOutput = await run_extraction(extraction_input, extractor)
