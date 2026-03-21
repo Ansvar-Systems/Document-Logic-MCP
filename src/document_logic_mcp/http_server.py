@@ -8,8 +8,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Security, Depends, APIRouter
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException, Request, Security, Depends, APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -20,9 +20,14 @@ from .tools import (
     resolve_technology_name_tool, suggest_terminology_addition_tool,
 )
 from .database import Database
+from .extraction.pipeline import run_extraction, ExtractionInput, ExtractionOutput
+from .extraction.extractor import DocumentExtractor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Legacy endpoints deprecation flag — set LEGACY_ENDPOINTS_ENABLED=false to disable
+LEGACY_ENDPOINTS_ENABLED: bool = os.getenv("LEGACY_ENDPOINTS_ENABLED", "true").lower() == "true"
 
 # --- Authentication ---
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -37,21 +42,26 @@ async def verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
     return api_key
 
-# Global database path
+def _get_db_path() -> Path:
+    """Return the database path from env, creating parent dirs if needed.
+
+    Called lazily by legacy endpoints when LEGACY_ENDPOINTS_ENABLED=true.
+    Not called during startup — no DB is required when running stateless-only.
+    """
+    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return db_path
+
+
+# Kept for backward-compat: legacy endpoint helpers that receive db_path as arg.
+# Populated on first legacy call when LEGACY_ENDPOINTS_ENABLED=true.
 db_path: Optional[Path] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
-    global db_path
-    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    db = Database(db_path)
-    await db.initialize()
-    logger.info(f"Database initialized at {db_path}")
-
+    """Server startup — no DB initialization required for stateless operation."""
+    logger.info("document-logic-mcp HTTP server starting (stateless mode)")
     yield
 
 
@@ -85,21 +95,25 @@ async def health_check():
     }
 
     # Check DB connectivity and report stats
-    if db_path and db_path.exists():
-        try:
-            async with aiosqlite.connect(str(db_path)) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(
-                    "SELECT COUNT(*) as cnt FROM documents"
-                )
-                row = await cursor.fetchone()
-                details["documents_count"] = row["cnt"] if row else 0
-                details["db_status"] = "connected"
-        except Exception as e:
-            status = "degraded"
-            details["db_status"] = f"error: {type(e).__name__}"
-    else:
-        details["db_status"] = "not_initialized"
+    try:
+        current_db_path = _get_db_path()
+        if current_db_path.exists():
+            try:
+                async with aiosqlite.connect(str(current_db_path)) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    cursor = await conn.execute(
+                        "SELECT COUNT(*) as cnt FROM documents"
+                    )
+                    row = await cursor.fetchone()
+                    details["documents_count"] = row["cnt"] if row else 0
+                    details["db_status"] = "connected"
+            except Exception as e:
+                status = "degraded"
+                details["db_status"] = f"error: {type(e).__name__}"
+        else:
+            details["db_status"] = "not_configured"  # No SQLite — stateless mode
+    except Exception:
+        details["db_status"] = "not_configured"
 
     details["status"] = status
     return details
@@ -163,6 +177,29 @@ class ExportAssessmentRequest(BaseModel):
     output_path: str = Field(..., description="Absolute path to save the export file")
 
 
+class StatelessExtractRequest(BaseModel):
+    sections: List[Dict[str, Any]] = Field(
+        ...,
+        description=(
+            "Pre-parsed sections. Each dict must have at minimum: "
+            "section_ref, title, content, section_index, page_start, page_end, parent_ref."
+        ),
+    )
+    filename: str = Field(..., description="Original document filename (used in metadata)")
+    analysis_context: Optional[str] = Field(
+        None,
+        description=(
+            "Optional domain context for enhanced extraction and synthesis. "
+            "Available: 'stride_threat_modeling', 'tprm_vendor_assessment', 'compliance_mapping'."
+        ),
+    )
+    extraction_model: Optional[str] = Field(
+        None, description="Optional LLM model override (e.g., 'ollama/llama3.1')"
+    )
+    schema_version: str = Field(..., description="Caller's schema version (echoed in metadata)")
+    input_hash: str = Field(..., description="Content hash of the input (echoed in metadata)")
+
+
 # Parse document endpoint
 @app.post("/parse")
 async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
@@ -170,7 +207,7 @@ async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
     try:
         result = await parse_document_tool(
             file_path=request.file_path,
-            db_path=db_path
+            db_path=_get_db_path()
         )
         return result
     except FileNotFoundError as e:
@@ -211,7 +248,7 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
             # Parse using temporary file path
             result = await parse_document_tool(
                 file_path=temp_path,
-                db_path=db_path
+                db_path=_get_db_path()
             )
             # Override filename with original name
             result["filename"] = request.filename
@@ -246,7 +283,7 @@ async def parse_file(request: ParseFileRequest) -> Dict[str, Any]:
     try:
         result = await parse_document_tool(
             file_path=str(resolved),
-            db_path=db_path,
+            db_path=_get_db_path(),
         )
         result["filename"] = request.filename
         return result
@@ -268,10 +305,12 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     that produces component registry, trust boundaries, implicit negatives,
     and ambiguity flags. The synthesis output is returned under the "synthesis" key.
     """
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         result = await extract_document_tool(
             doc_id=request.doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             extraction_model=request.model,
             analysis_context=request.analysis_context,
         )
@@ -281,6 +320,79 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Extract failed: {e}")
         raise HTTPException(status_code=500, detail="Document extraction failed")
+
+
+# Env-based caps for the stateless /extract-stateless endpoint
+_EXTRACT_MAX_SECTIONS: int = int(os.getenv("EXTRACT_MAX_SECTIONS", "200"))
+_EXTRACT_MAX_BODY_BYTES: int = int(os.getenv("EXTRACT_MAX_BODY_BYTES", str(10 * 1024 * 1024)))
+
+
+@app.post("/extract-stateless")
+async def extract_stateless(request: Request, body: StatelessExtractRequest) -> JSONResponse:
+    """Stateless extraction: accepts pre-parsed sections, returns structured results.
+
+    No database writes. Sections are processed in memory and the full
+    ExtractionOutput is returned in the response body. Results are not persisted.
+
+    Request/response bodies are not logged — payloads contain customer content.
+    """
+    logger.info("extract_request", extra={"section_count": len(body.sections), "doc_filename": body.filename})
+    # Section count cap
+    if len(body.sections) > _EXTRACT_MAX_SECTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Too many sections: {len(body.sections)} exceeds cap of "
+                f"{_EXTRACT_MAX_SECTIONS} (set EXTRACT_MAX_SECTIONS to change)"
+            ),
+        )
+
+    # Body size cap — use Content-Length header when available, otherwise compute
+    content_length_header = request.headers.get("content-length")
+    if content_length_header is not None:
+        body_bytes = int(content_length_header)
+    else:
+        # Approximate from serialised section content
+        body_bytes = sum(
+            len((s.get("content") or "").encode()) + len((s.get("title") or "").encode())
+            for s in body.sections
+        )
+    if body_bytes > _EXTRACT_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Request body too large: {body_bytes} bytes exceeds cap of "
+                f"{_EXTRACT_MAX_BODY_BYTES} bytes (set EXTRACT_MAX_BODY_BYTES to change)"
+            ),
+        )
+
+    extraction_input = ExtractionInput(
+        sections=body.sections,
+        filename=body.filename,
+        analysis_context=body.analysis_context,
+        input_hash=body.input_hash,
+        schema_version=body.schema_version,
+    )
+
+    extractor = DocumentExtractor(extraction_model_override=body.extraction_model)
+
+    try:
+        output: ExtractionOutput = await run_extraction(extraction_input, extractor)
+    except Exception as exc:
+        logger.error("Stateless extraction failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Stateless extraction failed")
+
+    return JSONResponse(
+        content={
+            "truths": output.truths,
+            "entities": output.entities,
+            "relationships": output.relationships,
+            "overview": output.overview,
+            "synthesis": output.synthesis,
+            "metadata": output.metadata,
+        },
+        headers={"X-Extraction-Schema-Version": body.schema_version},
+    )
 
 
 # Async extract endpoint — fire-and-forget, poll via GET /documents/{doc_id}
@@ -294,13 +406,16 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
       - status "completed"  → done (truths_count, entities_count populated)
       - status "failed"     → extraction error
     """
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     import aiosqlite
 
     # Validate document exists and is in a valid state for extraction
-    if not db_path or not db_path.exists():
+    _db_path = _get_db_path()
+    if not _db_path.exists():
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    async with aiosqlite.connect(str(db_path)) as conn:
+    async with aiosqlite.connect(str(_db_path)) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
             "SELECT status FROM documents WHERE doc_id = ?",
@@ -346,7 +461,7 @@ async def _background_extract(
     try:
         await extract_document_tool(
             doc_id=doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             extraction_model=extraction_model,
             analysis_context=analysis_context,
         )
@@ -360,10 +475,12 @@ async def _background_extract(
 @app.get("/documents")
 async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     """List documents with extraction status and counts. Supports pagination via ?limit=&offset=."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
-        result = await list_documents_tool(db_path=db_path, limit=limit, offset=offset)
+        result = await list_documents_tool(db_path=_get_db_path(), limit=limit, offset=offset)
         return result
     except Exception as e:
         logger.error(f"List documents failed: {e}")
@@ -378,10 +495,12 @@ async def get_document(
     include_sections: bool = False,
 ) -> Dict[str, Any]:
     """Get document details. Pass include_sections and/or include_extracted_data for full content."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         result = await get_document_tool(
             doc_id=doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             include_extracted_data=include_extracted_data,
             include_sections=include_sections,
         )
@@ -397,8 +516,10 @@ async def get_document(
 @app.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str) -> Dict[str, Any]:
     """Delete a document and all associated extracted data."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
-        result = await delete_document_tool(doc_id=doc_id, db_path=db_path)
+        result = await delete_document_tool(doc_id=doc_id, db_path=_get_db_path())
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -411,11 +532,13 @@ async def delete_document(doc_id: str) -> Dict[str, Any]:
 @app.post("/query-documents")
 async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
     """Query extracted truths with natural language. Returns verified facts with citations."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
 
         try:
@@ -435,11 +558,13 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
 @app.post("/entity-aliases")
 async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
     """Find potential aliases for a named entity."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
 
         try:
@@ -485,7 +610,7 @@ async def suggest_terminology_addition(request: SuggestTerminologyAdditionReques
             raw_string=request.raw_string,
             resolved_canonical=request.resolved_canonical,
             context=request.context,
-            db_path=db_path,
+            db_path=_get_db_path(),
         )
         return result
     except Exception as e:
@@ -497,10 +622,12 @@ async def suggest_terminology_addition(request: SuggestTerminologyAdditionReques
 @app.post("/export")
 async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
     """Export all extracted data as a deliverable file."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .export import AssessmentExporter
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
         exporter = AssessmentExporter(db)
 

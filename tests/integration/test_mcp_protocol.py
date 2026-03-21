@@ -2,27 +2,20 @@
 
 Verifies the STDIO server correctly handles MCP protocol messages:
 tool listing, tool invocation, and structured error responses.
+
+The MCP stdio surface exposes only resolve_technology_name.
+All document processing is via the HTTP API (/extract-stateless).
 """
 
 import json
 import pytest
-from unittest.mock import patch
-from mcp.types import ListToolsRequest, CallToolRequest
+from mcp.types import ListToolsRequest, CallToolRequest  # noqa: F401 (CallToolRequest used in _call_tool)
 
 from document_logic_mcp.server import create_server
 
 
 EXPECTED_TOOLS = {
-    "parse_document",
-    "extract_document",
-    "list_documents",
-    "get_document",
-    "delete_document",
-    "query_documents",
-    "get_entity_aliases",
-    "export_assessment",
     "resolve_technology_name",
-    "suggest_terminology_addition",
 }
 
 
@@ -64,9 +57,9 @@ class TestToolListing:
 
     @pytest.mark.asyncio
     async def test_tool_count(self, server):
-        """Server must expose exactly 10 tools."""
+        """Server must expose exactly 1 tool (resolve_technology_name)."""
         tools = await _list_tools(server)
-        assert len(tools) == 10
+        assert len(tools) == 1
 
     @pytest.mark.asyncio
     async def test_tools_have_descriptions(self, server):
@@ -94,32 +87,26 @@ class TestToolInvocation:
 
     @pytest.mark.asyncio
     async def test_missing_required_param_returns_error(self, server):
-        """Calling parse_document without file_path returns isError with message."""
-        result = await _call_tool(server, "parse_document", {})
+        """Calling resolve_technology_name without raw_name returns isError."""
+        result = await _call_tool(server, "resolve_technology_name", {})
         assert result.isError is True
         error_text = result.content[0].text
-        # MCP SDK schema validation catches missing required params
-        assert "file_path" in error_text
+        assert "raw_name" in error_text
 
     @pytest.mark.asyncio
-    async def test_list_documents_returns_json(self, server, tmp_path):
-        """list_documents should return valid JSON with documents array."""
-        db_path = tmp_path / "test.db"
-        with patch("document_logic_mcp.server.DEFAULT_DB_PATH", db_path):
-            result = await _call_tool(server, "list_documents", {})
+    async def test_resolve_technology_name_returns_json(self, server):
+        """resolve_technology_name returns valid JSON with canonical_name field."""
+        result = await _call_tool(server, "resolve_technology_name", {
+            "raw_name": "PostgreSQL"
+        })
         assert result.isError is not True
         data = json.loads(result.content[0].text)
-        assert "documents" in data
-        assert "total" in data
+        assert "canonical_name" in data
 
     @pytest.mark.asyncio
-    async def test_handler_error_returns_structured_json(self, server, tmp_path):
-        """Handler-level errors (e.g., file not found) return structured JSON."""
-        db_path = tmp_path / "test.db"
-        with patch("document_logic_mcp.server.DEFAULT_DB_PATH", db_path):
-            result = await _call_tool(server, "parse_document", {
-                "file_path": "/nonexistent/path/doc.pdf"
-            })
+    async def test_unknown_tool_returns_structured_error(self, server):
+        """Calling an unknown tool returns structured JSON with type=invalid_input."""
+        result = await _call_tool(server, "nonexistent_tool", {})
         assert result.isError is True
         error_data = json.loads(result.content[0].text)
         assert "error" in error_data

@@ -1,6 +1,8 @@
 """Tests for extraction storage."""
 
 import pytest
+
+pytestmark = pytest.mark.legacy
 from document_logic_mcp.storage import ExtractionStorage
 from document_logic_mcp.extraction.schemas import (
     ExtractedTruth,

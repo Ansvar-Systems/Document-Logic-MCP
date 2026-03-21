@@ -1,6 +1,8 @@
 """Tests for export functionality."""
 
 import pytest
+
+pytestmark = pytest.mark.legacy
 import json
 from document_logic_mcp.export import AssessmentExporter
 from document_logic_mcp.database import Database
