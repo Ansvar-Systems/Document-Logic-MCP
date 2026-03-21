@@ -6,6 +6,10 @@ import shutil
 from pathlib import Path
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "legacy: tests that depend on SQLite (skipped after migration)")
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for tests."""

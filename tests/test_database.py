@@ -1,6 +1,8 @@
 """Tests for database layer."""
 
 import pytest
+
+pytestmark = pytest.mark.legacy
 import aiosqlite
 from pathlib import Path
 from datetime import datetime

@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.legacy
+
 from document_logic_mcp.tools import get_document_tool, parse_document_tool
 
 

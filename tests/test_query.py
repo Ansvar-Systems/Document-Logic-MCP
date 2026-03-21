@@ -1,6 +1,8 @@
 """Tests for query interface."""
 
 import pytest
+
+pytestmark = pytest.mark.legacy
 from document_logic_mcp.query import QueryEngine
 from document_logic_mcp.database import Database
 
