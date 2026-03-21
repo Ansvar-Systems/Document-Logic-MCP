@@ -24,7 +24,10 @@ Schema mapping (internal dataclass → output dict):
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .extractor import DocumentExtractor
 
 from ..parsers.base import ParseResult, Section
 from .schemas import (
@@ -272,7 +275,7 @@ def _serialise_synthesis(synthesis) -> dict:
 # ─── Main pipeline function ──────────────────────────────────────────────────
 
 
-async def run_extraction(inp: ExtractionInput, extractor) -> ExtractionOutput:
+async def run_extraction(inp: ExtractionInput, extractor: "DocumentExtractor") -> ExtractionOutput:
     """Run the three-pass extraction pipeline in memory and return results.
 
     Pass 1 — overview: builds DocumentOverview from the full document.
@@ -314,7 +317,19 @@ async def run_extraction(inp: ExtractionInput, extractor) -> ExtractionOutput:
 
     # ── Pass 1: overview ──────────────────────────────────────────────────
     logger.info("Pass 1: Extracting document overview for '%s'", inp.filename)
-    overview: DocumentOverview = await extractor.extract_overview(parse_result)
+    try:
+        overview: DocumentOverview = await extractor.extract_overview(parse_result)
+    except Exception as e:
+        msg = f"Overview extraction failed: {e}"
+        logger.warning(msg)
+        warnings.append(msg)
+        overview = DocumentOverview(
+            doc_id="stateless",
+            purpose="",
+            topics=[],
+            entities=[],
+            document_type="unknown",
+        )
 
     # ── Pass 2: per-section extraction ────────────────────────────────────
     logger.info("Pass 2: Extracting from %d sections", len(inp.sections))
@@ -330,7 +345,7 @@ async def run_extraction(inp: ExtractionInput, extractor) -> ExtractionOutput:
 
     failed_sections: list[str] = []
 
-    for idx, (section, section_obj) in enumerate(zip(inp.sections, sections_obj)):
+    for idx, section_obj in enumerate(sections_obj):
         section_title = section_obj.title
         logger.info(
             "  Section %d/%d: %s", idx + 1, len(inp.sections), section_title
