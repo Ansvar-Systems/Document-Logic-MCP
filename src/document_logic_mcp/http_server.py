@@ -150,6 +150,9 @@ class ExtractDocumentRequest(BaseModel):
             "Available: 'stride_threat_modeling', 'tprm_vendor_assessment', 'compliance_mapping'"
         )
     )
+    org_id: Optional[str] = Field(
+        None, description="Organisation ID for BYOK model routing (forwarded to LLM gateway)"
+    )
 
 
 class QueryDocumentsRequest(BaseModel):
@@ -198,6 +201,9 @@ class StatelessExtractRequest(BaseModel):
     )
     schema_version: str = Field(..., description="Caller's schema version (echoed in metadata)")
     input_hash: str = Field(..., description="Content hash of the input (echoed in metadata)")
+    org_id: Optional[str] = Field(
+        None, description="Organisation ID for BYOK model routing (forwarded to LLM gateway)"
+    )
 
 
 # Parse document endpoint
@@ -376,6 +382,7 @@ async def extract_stateless(request: Request, body: StatelessExtractRequest) -> 
 
     extractor = DocumentExtractor(
         extraction_model_override=body.extraction_model,
+        org_id=body.org_id,
     )
 
     try:
@@ -445,6 +452,7 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
             doc_id=request.doc_id,
             extraction_model=request.model,
             analysis_context=request.analysis_context,
+            org_id=request.org_id,
         )
     )
 
@@ -458,6 +466,7 @@ async def _background_extract(
     doc_id: str,
     extraction_model: str | None,
     analysis_context: str | None,
+    org_id: str | None = None,
 ) -> None:
     """Run extraction in the background. Errors are captured in document status."""
     try:
@@ -466,6 +475,7 @@ async def _background_extract(
             db_path=_get_db_path(),
             extraction_model=extraction_model,
             analysis_context=analysis_context,
+            org_id=org_id,
         )
         logger.info("Background extraction completed for %s", doc_id)
     except Exception:
