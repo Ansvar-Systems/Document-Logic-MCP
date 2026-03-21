@@ -407,11 +407,10 @@ async def run_extraction(inp: ExtractionInput, extractor) -> ExtractionOutput:
         "extractor_version": VERSION,
         "model_used": getattr(extractor, "extraction_model", None),
         "input_hash": inp.input_hash,
-        "counts": {
-            "truths": len(truth_dicts),
-            "entities": len(deduped_entities),
-            "relationships": len(relationship_dicts),
-        },
+        "section_count": len(inp.sections),
+        "truths_count": len(truth_dicts),
+        "entities_count": len(deduped_entities),
+        "relationships_count": len(relationship_dicts),
         "duration_seconds": round(duration, 3),
         "warnings": warnings,
     }

@@ -135,9 +135,10 @@ async def test_run_extraction_returns_complete_payload():
     meta = result.metadata
     assert meta["schema_version"] == "1.0"
     assert meta["input_hash"] == "abc123"
-    assert meta["counts"]["truths"] == 2
-    assert meta["counts"]["entities"] == 2
-    assert meta["counts"]["relationships"] == 2
+    assert meta["truths_count"] == 2
+    assert meta["entities_count"] == 2
+    assert meta["relationships_count"] == 2
+    assert meta["section_count"] == 2
     assert "duration_seconds" in meta
     assert "model_used" in meta
     assert "extractor_version" in meta
