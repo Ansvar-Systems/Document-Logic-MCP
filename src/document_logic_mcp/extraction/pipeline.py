@@ -430,6 +430,19 @@ async def run_extraction(inp: ExtractionInput, extractor: "DocumentExtractor") -
         "warnings": warnings,
     }
 
+    logger.info(
+        "extraction_complete",
+        extra={
+            "section_count": len(inp.sections),
+            "truths_count": len(truth_dicts),
+            "entities_count": len(deduped_entities),
+            "relationships_count": len(relationship_dicts),
+            "duration_seconds": round(duration, 2),
+            "model_used": getattr(extractor, "extraction_model", None) or "unknown",
+            "warnings_count": len(warnings),
+        },
+    )
+
     return ExtractionOutput(
         truths=truth_dicts,
         entities=deduped_entities,

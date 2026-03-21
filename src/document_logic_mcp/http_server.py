@@ -332,6 +332,7 @@ async def extract_stateless(request: Request, body: StatelessExtractRequest) -> 
 
     Request/response bodies are not logged — payloads contain customer content.
     """
+    logger.info("extract_request", extra={"section_count": len(body.sections), "filename": body.filename})
     # Section count cap
     if len(body.sections) > _EXTRACT_MAX_SECTIONS:
         raise HTTPException(
