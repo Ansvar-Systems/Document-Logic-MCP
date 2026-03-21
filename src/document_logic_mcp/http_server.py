@@ -8,8 +8,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Security, Depends, APIRouter
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException, Request, Security, Depends, APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -20,6 +20,8 @@ from .tools import (
     resolve_technology_name_tool, suggest_terminology_addition_tool,
 )
 from .database import Database
+from .extraction.pipeline import run_extraction, ExtractionInput, ExtractionOutput
+from .extraction.extractor import DocumentExtractor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -163,6 +165,29 @@ class ExportAssessmentRequest(BaseModel):
     output_path: str = Field(..., description="Absolute path to save the export file")
 
 
+class StatelessExtractRequest(BaseModel):
+    sections: List[Dict[str, Any]] = Field(
+        ...,
+        description=(
+            "Pre-parsed sections. Each dict must have at minimum: "
+            "section_ref, title, content, section_index, page_start, page_end, parent_ref."
+        ),
+    )
+    filename: str = Field(..., description="Original document filename (used in metadata)")
+    analysis_context: Optional[str] = Field(
+        None,
+        description=(
+            "Optional domain context for enhanced extraction and synthesis. "
+            "Available: 'stride_threat_modeling', 'tprm_vendor_assessment', 'compliance_mapping'."
+        ),
+    )
+    extraction_model: Optional[str] = Field(
+        None, description="Optional LLM model override (e.g., 'ollama/llama3.1')"
+    )
+    schema_version: str = Field(..., description="Caller's schema version (echoed in metadata)")
+    input_hash: str = Field(..., description="Content hash of the input (echoed in metadata)")
+
+
 # Parse document endpoint
 @app.post("/parse")
 async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
@@ -281,6 +306,78 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Extract failed: {e}")
         raise HTTPException(status_code=500, detail="Document extraction failed")
+
+
+# Env-based caps for the stateless /extract-stateless endpoint
+_EXTRACT_MAX_SECTIONS: int = int(os.getenv("EXTRACT_MAX_SECTIONS", "200"))
+_EXTRACT_MAX_BODY_BYTES: int = int(os.getenv("EXTRACT_MAX_BODY_BYTES", str(10 * 1024 * 1024)))
+
+
+@app.post("/extract-stateless")
+async def extract_stateless(request: Request, body: StatelessExtractRequest) -> JSONResponse:
+    """Stateless extraction: accepts pre-parsed sections, returns structured results.
+
+    No database writes. Sections are processed in memory and the full
+    ExtractionOutput is returned in the response body. Results are not persisted.
+
+    Request/response bodies are not logged — payloads contain customer content.
+    """
+    # Section count cap
+    if len(body.sections) > _EXTRACT_MAX_SECTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Too many sections: {len(body.sections)} exceeds cap of "
+                f"{_EXTRACT_MAX_SECTIONS} (set EXTRACT_MAX_SECTIONS to change)"
+            ),
+        )
+
+    # Body size cap — use Content-Length header when available, otherwise compute
+    content_length_header = request.headers.get("content-length")
+    if content_length_header is not None:
+        body_bytes = int(content_length_header)
+    else:
+        # Approximate from serialised section content
+        body_bytes = sum(
+            len((s.get("content") or "").encode()) + len((s.get("title") or "").encode())
+            for s in body.sections
+        )
+    if body_bytes > _EXTRACT_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Request body too large: {body_bytes} bytes exceeds cap of "
+                f"{_EXTRACT_MAX_BODY_BYTES} bytes (set EXTRACT_MAX_BODY_BYTES to change)"
+            ),
+        )
+
+    extraction_input = ExtractionInput(
+        sections=body.sections,
+        filename=body.filename,
+        analysis_context=body.analysis_context,
+        input_hash=body.input_hash,
+        schema_version=body.schema_version,
+    )
+
+    extractor = DocumentExtractor(extraction_model_override=body.extraction_model)
+
+    try:
+        output: ExtractionOutput = await run_extraction(extraction_input, extractor)
+    except Exception as exc:
+        logger.error("Stateless extraction failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Stateless extraction failed")
+
+    return JSONResponse(
+        content={
+            "truths": output.truths,
+            "entities": output.entities,
+            "relationships": output.relationships,
+            "overview": output.overview,
+            "synthesis": output.synthesis,
+            "metadata": output.metadata,
+        },
+        headers={"X-Extraction-Schema-Version": body.schema_version},
+    )
 
 
 # Async extract endpoint — fire-and-forget, poll via GET /documents/{doc_id}
