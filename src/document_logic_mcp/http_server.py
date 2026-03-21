@@ -26,6 +26,9 @@ from .extraction.extractor import DocumentExtractor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Legacy endpoints deprecation flag — set LEGACY_ENDPOINTS_ENABLED=false to disable
+LEGACY_ENDPOINTS_ENABLED: bool = os.getenv("LEGACY_ENDPOINTS_ENABLED", "true").lower() == "true"
+
 # --- Authentication ---
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -293,6 +296,8 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     that produces component registry, trust boundaries, implicit negatives,
     and ambiguity flags. The synthesis output is returned under the "synthesis" key.
     """
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         result = await extract_document_tool(
             doc_id=request.doc_id,
@@ -391,6 +396,8 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
       - status "completed"  → done (truths_count, entities_count populated)
       - status "failed"     → extraction error
     """
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     import aiosqlite
 
     # Validate document exists and is in a valid state for extraction
@@ -457,6 +464,8 @@ async def _background_extract(
 @app.get("/documents")
 async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     """List documents with extraction status and counts. Supports pagination via ?limit=&offset=."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -475,6 +484,8 @@ async def get_document(
     include_sections: bool = False,
 ) -> Dict[str, Any]:
     """Get document details. Pass include_sections and/or include_extracted_data for full content."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         result = await get_document_tool(
             doc_id=doc_id,
@@ -494,6 +505,8 @@ async def get_document(
 @app.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str) -> Dict[str, Any]:
     """Delete a document and all associated extracted data."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         result = await delete_document_tool(doc_id=doc_id, db_path=db_path)
         return result
@@ -508,6 +521,8 @@ async def delete_document(doc_id: str) -> Dict[str, Any]:
 @app.post("/query-documents")
 async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
     """Query extracted truths with natural language. Returns verified facts with citations."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
@@ -532,6 +547,8 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
 @app.post("/entity-aliases")
 async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
     """Find potential aliases for a named entity."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
@@ -594,6 +611,8 @@ async def suggest_terminology_addition(request: SuggestTerminologyAdditionReques
 @app.post("/export")
 async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
     """Export all extracted data as a deliverable file."""
+    if not LEGACY_ENDPOINTS_ENABLED:
+        return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
         from .export import AssessmentExporter
 
