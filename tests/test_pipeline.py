@@ -208,3 +208,29 @@ async def test_run_extraction_skips_failed_sections():
     # Warning must be recorded
     assert len(result.metadata["warnings"]) >= 1
     assert any("Section 1" in w for w in result.metadata["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_run_extraction_raises_when_all_sections_fail():
+    """When every section fails extraction, raise ValueError (not empty 200)."""
+    extractor = _make_extractor()
+    extractor.extract_section = AsyncMock(
+        side_effect=[
+            RuntimeError("LLM timeout"),
+            RuntimeError("LLM timeout"),
+        ]
+    )
+
+    inp = ExtractionInput(
+        sections=[
+            {"title": "Section 1", "content": "Content one."},
+            {"title": "Section 2", "content": "Content two."},
+        ],
+        filename="test.pdf",
+        analysis_context=None,
+        input_hash="allfail123",
+        schema_version="1.0",
+    )
+
+    with pytest.raises(ValueError, match="All .* sections failed"):
+        await run_extraction(inp, extractor)

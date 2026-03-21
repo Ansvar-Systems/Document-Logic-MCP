@@ -385,6 +385,12 @@ async def run_extraction(inp: ExtractionInput, extractor: "DocumentExtractor") -
             len(failed_sections), len(inp.sections), failed_sections,
         )
 
+    # If every section failed, this is an extraction failure — not an empty document
+    if not all_truths and warnings:
+        raise ValueError(
+            f"All {len(inp.sections)} sections failed extraction: {'; '.join(warnings)}"
+        )
+
     # Dedup entities by name+type
     deduped_entities = _dedup_entities(entity_dicts)
 

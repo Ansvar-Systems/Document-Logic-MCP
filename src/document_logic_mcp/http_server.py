@@ -95,21 +95,25 @@ async def health_check():
     }
 
     # Check DB connectivity and report stats
-    if db_path and db_path.exists():
-        try:
-            async with aiosqlite.connect(str(db_path)) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(
-                    "SELECT COUNT(*) as cnt FROM documents"
-                )
-                row = await cursor.fetchone()
-                details["documents_count"] = row["cnt"] if row else 0
-                details["db_status"] = "connected"
-        except Exception as e:
-            status = "degraded"
-            details["db_status"] = f"error: {type(e).__name__}"
-    else:
-        details["db_status"] = "not_initialized"
+    try:
+        current_db_path = _get_db_path()
+        if current_db_path.exists():
+            try:
+                async with aiosqlite.connect(str(current_db_path)) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    cursor = await conn.execute(
+                        "SELECT COUNT(*) as cnt FROM documents"
+                    )
+                    row = await cursor.fetchone()
+                    details["documents_count"] = row["cnt"] if row else 0
+                    details["db_status"] = "connected"
+            except Exception as e:
+                status = "degraded"
+                details["db_status"] = f"error: {type(e).__name__}"
+        else:
+            details["db_status"] = "not_configured"  # No SQLite — stateless mode
+    except Exception:
+        details["db_status"] = "not_configured"
 
     details["status"] = status
     return details
@@ -332,7 +336,7 @@ async def extract_stateless(request: Request, body: StatelessExtractRequest) -> 
 
     Request/response bodies are not logged — payloads contain customer content.
     """
-    logger.info("extract_request", extra={"section_count": len(body.sections), "filename": body.filename})
+    logger.info("extract_request", extra={"section_count": len(body.sections), "doc_filename": body.filename})
     # Section count cap
     if len(body.sections) > _EXTRACT_MAX_SECTIONS:
         raise HTTPException(
