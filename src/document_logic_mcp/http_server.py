@@ -42,21 +42,26 @@ async def verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
     return api_key
 
-# Global database path
+def _get_db_path() -> Path:
+    """Return the database path from env, creating parent dirs if needed.
+
+    Called lazily by legacy endpoints when LEGACY_ENDPOINTS_ENABLED=true.
+    Not called during startup — no DB is required when running stateless-only.
+    """
+    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return db_path
+
+
+# Kept for backward-compat: legacy endpoint helpers that receive db_path as arg.
+# Populated on first legacy call when LEGACY_ENDPOINTS_ENABLED=true.
 db_path: Optional[Path] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
-    global db_path
-    db_path = Path(os.getenv("DB_PATH", "data/assessment.db"))
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    db = Database(db_path)
-    await db.initialize()
-    logger.info(f"Database initialized at {db_path}")
-
+    """Server startup — no DB initialization required for stateless operation."""
+    logger.info("document-logic-mcp HTTP server starting (stateless mode)")
     yield
 
 
@@ -198,7 +203,7 @@ async def parse_document(request: ParseDocumentRequest) -> Dict[str, Any]:
     try:
         result = await parse_document_tool(
             file_path=request.file_path,
-            db_path=db_path
+            db_path=_get_db_path()
         )
         return result
     except FileNotFoundError as e:
@@ -239,7 +244,7 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
             # Parse using temporary file path
             result = await parse_document_tool(
                 file_path=temp_path,
-                db_path=db_path
+                db_path=_get_db_path()
             )
             # Override filename with original name
             result["filename"] = request.filename
@@ -274,7 +279,7 @@ async def parse_file(request: ParseFileRequest) -> Dict[str, Any]:
     try:
         result = await parse_document_tool(
             file_path=str(resolved),
-            db_path=db_path,
+            db_path=_get_db_path(),
         )
         result["filename"] = request.filename
         return result
@@ -301,7 +306,7 @@ async def extract_document(request: ExtractDocumentRequest) -> Dict[str, Any]:
     try:
         result = await extract_document_tool(
             doc_id=request.doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             extraction_model=request.model,
             analysis_context=request.analysis_context,
         )
@@ -401,10 +406,11 @@ async def extract_document_async(request: ExtractDocumentRequest) -> JSONRespons
     import aiosqlite
 
     # Validate document exists and is in a valid state for extraction
-    if not db_path or not db_path.exists():
+    _db_path = _get_db_path()
+    if not _db_path.exists():
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    async with aiosqlite.connect(str(db_path)) as conn:
+    async with aiosqlite.connect(str(_db_path)) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
             "SELECT status FROM documents WHERE doc_id = ?",
@@ -450,7 +456,7 @@ async def _background_extract(
     try:
         await extract_document_tool(
             doc_id=doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             extraction_model=extraction_model,
             analysis_context=analysis_context,
         )
@@ -469,7 +475,7 @@ async def list_documents(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     try:
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
-        result = await list_documents_tool(db_path=db_path, limit=limit, offset=offset)
+        result = await list_documents_tool(db_path=_get_db_path(), limit=limit, offset=offset)
         return result
     except Exception as e:
         logger.error(f"List documents failed: {e}")
@@ -489,7 +495,7 @@ async def get_document(
     try:
         result = await get_document_tool(
             doc_id=doc_id,
-            db_path=db_path,
+            db_path=_get_db_path(),
             include_extracted_data=include_extracted_data,
             include_sections=include_sections,
         )
@@ -508,7 +514,7 @@ async def delete_document(doc_id: str) -> Dict[str, Any]:
     if not LEGACY_ENDPOINTS_ENABLED:
         return JSONResponse(status_code=410, content={"detail": "Endpoint deprecated. Use POST /extract-stateless."})
     try:
-        result = await delete_document_tool(doc_id=doc_id, db_path=db_path)
+        result = await delete_document_tool(doc_id=doc_id, db_path=_get_db_path())
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -527,7 +533,7 @@ async def query_documents(request: QueryDocumentsRequest) -> Dict[str, Any]:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
 
         try:
@@ -553,7 +559,7 @@ async def get_entity_aliases(request: EntityAliasesRequest) -> Dict[str, Any]:
         from .query import QueryEngine
         from .embeddings import EmbeddingService
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
 
         try:
@@ -599,7 +605,7 @@ async def suggest_terminology_addition(request: SuggestTerminologyAdditionReques
             raw_string=request.raw_string,
             resolved_canonical=request.resolved_canonical,
             context=request.context,
-            db_path=db_path,
+            db_path=_get_db_path(),
         )
         return result
     except Exception as e:
@@ -616,7 +622,7 @@ async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
     try:
         from .export import AssessmentExporter
 
-        db = Database(db_path)
+        db = Database(_get_db_path())
         await db.initialize()
         exporter = AssessmentExporter(db)
 
