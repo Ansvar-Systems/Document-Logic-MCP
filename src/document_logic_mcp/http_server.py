@@ -334,14 +334,24 @@ _EXTRACT_MAX_BODY_BYTES: int = int(os.getenv("EXTRACT_MAX_BODY_BYTES", str(10 * 
 
 
 @app.post("/extract-stateless")
-async def extract_stateless(request: Request, body: StatelessExtractRequest) -> JSONResponse:
+async def extract_stateless(
+    request: Request,
+    body: StatelessExtractRequest,
+    stream_progress: bool = False,
+):
     """Stateless extraction: accepts pre-parsed sections, returns structured results.
 
     No database writes. Sections are processed in memory and the full
     ExtractionOutput is returned in the response body. Results are not persisted.
 
+    When stream_progress=true, returns a StreamingResponse with media type
+    application/x-ndjson. Each completed section emits a progress event JSON line.
+    The final line is the complete result with "event": "complete".
+
     Request/response bodies are not logged — payloads contain customer content.
     """
+    import json as _json
+
     logger.info("extract_request", extra={"section_count": len(body.sections), "doc_filename": body.filename})
     # Section count cap
     if len(body.sections) > _EXTRACT_MAX_SECTIONS:
@@ -385,21 +395,87 @@ async def extract_stateless(request: Request, body: StatelessExtractRequest) -> 
         org_id=body.org_id,
     )
 
-    try:
-        output: ExtractionOutput = await run_extraction(extraction_input, extractor)
-    except Exception as exc:
-        logger.error("Stateless extraction failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Stateless extraction failed")
+    if not stream_progress:
+        # Non-streaming path — unchanged behaviour
+        try:
+            output: ExtractionOutput = await run_extraction(extraction_input, extractor)
+        except Exception as exc:
+            logger.error("Stateless extraction failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Stateless extraction failed")
 
-    return JSONResponse(
-        content={
-            "truths": output.truths,
-            "entities": output.entities,
-            "relationships": output.relationships,
-            "overview": output.overview,
-            "synthesis": output.synthesis,
-            "metadata": output.metadata,
-        },
+        return JSONResponse(
+            content={
+                "truths": output.truths,
+                "entities": output.entities,
+                "relationships": output.relationships,
+                "overview": output.overview,
+                "synthesis": output.synthesis,
+                "metadata": output.metadata,
+            },
+            headers={"X-Extraction-Schema-Version": body.schema_version},
+        )
+
+    # Streaming path — NDJSON progress events followed by complete result
+    from starlette.responses import StreamingResponse
+
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _progress_callback(event: dict) -> None:
+        await progress_queue.put(event)
+
+    async def _ndjson_generator():
+        # Start extraction as a background task
+        extraction_task = asyncio.create_task(
+            run_extraction(extraction_input, extractor, progress_callback=_progress_callback)
+        )
+
+        try:
+            while not extraction_task.done():
+                # Drain any queued progress events
+                try:
+                    while True:
+                        event = progress_queue.get_nowait()
+                        yield _json.dumps(event) + "\n"
+                except asyncio.QueueEmpty:
+                    pass
+                # Yield control briefly to allow the extraction task to make progress
+                await asyncio.sleep(0)
+
+            # Drain any remaining progress events after task completion
+            try:
+                while True:
+                    event = progress_queue.get_nowait()
+                    yield _json.dumps(event) + "\n"
+            except asyncio.QueueEmpty:
+                pass
+
+            # Check for exceptions
+            exc = extraction_task.exception()
+            if exc is not None:
+                logger.error("Streaming extraction failed: %s", exc, exc_info=True)
+                yield _json.dumps({"event": "error", "detail": str(exc)}) + "\n"
+                return
+
+            output: ExtractionOutput = extraction_task.result()
+            result_dict = {
+                "truths": output.truths,
+                "entities": output.entities,
+                "relationships": output.relationships,
+                "overview": output.overview,
+                "synthesis": output.synthesis,
+                "metadata": output.metadata,
+            }
+            yield _json.dumps({"event": "complete", **result_dict}) + "\n"
+
+        except Exception as exc:
+            logger.error("NDJSON generator error: %s", exc, exc_info=True)
+            if not extraction_task.done():
+                extraction_task.cancel()
+            yield _json.dumps({"event": "error", "detail": str(exc)}) + "\n"
+
+    return StreamingResponse(
+        _ndjson_generator(),
+        media_type="application/x-ndjson",
         headers={"X-Extraction-Schema-Version": body.schema_version},
     )
 
@@ -658,12 +734,4 @@ async def export_assessment(request: ExportAssessmentRequest) -> Dict[str, Any]:
         return {"exported_to": str(result_path), "format": format_type}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Export failed: {e}")
-        raise HTTPException(status_code=500, detail="Export failed")
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 3000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+ 
