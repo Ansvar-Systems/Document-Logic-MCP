@@ -172,6 +172,7 @@ async def extract_document_tool(
     db_path: Path,
     extraction_model: str | None = None,
     analysis_context: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extract truths, entities, and relationships from parsed document.
@@ -257,7 +258,7 @@ async def extract_document_tool(
     # Create extraction objects
     from .embeddings import EmbeddingService
 
-    extractor = DocumentExtractor(extraction_model_override=extraction_model)
+    extractor = DocumentExtractor(extraction_model_override=extraction_model, org_id=org_id)
 
     # Initialize embedding service for semantic search
     try:

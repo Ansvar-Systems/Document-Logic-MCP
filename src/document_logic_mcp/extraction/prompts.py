@@ -411,13 +411,13 @@ lex_specialis/delegated_act/implementing_act/standard/equivalence), relationship
 and evidence citation.
 
 **9. scope_definitions** — Complete applicability map. Contains:
-- entity_types_included: array of {entity_type, description, article_reference, evidence}
-- entity_types_excluded: array of {entity_type, description, article_reference, evidence}
+- entity_types_included: array of {{entity_type, description, article_reference, evidence}}
+- entity_types_excluded: array of {{entity_type, description, article_reference, evidence}}
 - data_types_in_scope: array of data type strings
 - geographic_scope: territorial applicability description
 - sectoral_scope: array of sector/industry strings
 - material_scope: which activities are covered
-- applicability_thresholds: array of {threshold_type, value, article_reference}
+- applicability_thresholds: array of {{threshold_type, value, article_reference}}
 
 **Context-specific synthesis (if analysis_context="tprm_vendor_assessment"):**
 

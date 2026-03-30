@@ -65,16 +65,22 @@ class DocumentExtractor:
     def __init__(
         self,
         llm_client: Optional[Anthropic] = None,
-        extraction_model_override: Optional[str] = None
+        extraction_model_override: Optional[str] = None,
+        org_id: Optional[str] = None,
     ):
         """Initialize extractor with LLM client or gateway.
 
         Args:
             llm_client: Optional Anthropic client (for direct mode only)
             extraction_model_override: Optional model override (takes precedence over env var)
+            org_id: Optional organisation ID for BYOK model routing (forwarded to gateway)
         """
         self.gateway_url = os.getenv("LLM_GATEWAY_URL")
-        self.gateway_token = os.getenv("LLM_GATEWAY_API_KEY", "")
+        self.gateway_token = (
+            os.getenv("INTERNAL_SERVICE_API_KEY")
+            or os.getenv("LLM_GATEWAY_API_KEY", "")
+        )
+        self.org_id = org_id
         # Use override if provided, otherwise fall back to env var
         self.extraction_model = (
             extraction_model_override
@@ -84,7 +90,8 @@ class DocumentExtractor:
         if self.gateway_url:
             if not self.gateway_token:
                 raise ValueError(
-                    "LLM_GATEWAY_API_KEY must be set when LLM_GATEWAY_URL is configured"
+                    "INTERNAL_SERVICE_API_KEY (or LLM_GATEWAY_API_KEY) must be set "
+                    "when LLM_GATEWAY_URL is configured"
                 )
             logger.info(f"Using LLM Gateway mode: {self.gateway_url}, model: {self.extraction_model}")
             self.llm = None
@@ -116,19 +123,25 @@ class DocumentExtractor:
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens
+                "max_tokens": max_tokens,
+                "purpose": "extraction",
             }
             if provider:
                 payload["provider"] = provider
+
+            # Build headers — include org ID when available for BYOK routing
+            headers = {
+                "X-Service-API-Key": self.gateway_token,
+                "Content-Type": "application/json",
+            }
+            if self.org_id:
+                headers["X-Organization-ID"] = self.org_id
 
             # Gateway mode - call LLM Gateway with service API key
             async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(
                     f"{self.gateway_url}/api/v1/chat/completions",
-                    headers={
-                        "X-Service-API-Key": self.gateway_token,
-                        "Content-Type": "application/json"
-                    },
+                    headers=headers,
                     json=payload
                 )
                 response.raise_for_status()
