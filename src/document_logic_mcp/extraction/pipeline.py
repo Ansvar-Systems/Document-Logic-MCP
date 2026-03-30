@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from typing import Callable, Awaitable
     from .extractor import DocumentExtractor
 
 from ..parsers.base import ParseResult, Section
@@ -275,7 +276,11 @@ def _serialise_synthesis(synthesis) -> dict:
 # ─── Main pipeline function ──────────────────────────────────────────────────
 
 
-async def run_extraction(inp: ExtractionInput, extractor: "DocumentExtractor") -> ExtractionOutput:
+async def run_extraction(
+    inp: ExtractionInput,
+    extractor: "DocumentExtractor",
+    progress_callback: "Callable[[dict], Awaitable[None]] | None" = None,
+) -> ExtractionOutput:
     """Run the three-pass extraction pipeline in memory and return results.
 
     Pass 1 — overview: builds DocumentOverview from the full document.
@@ -378,6 +383,19 @@ async def run_extraction(inp: ExtractionInput, extractor: "DocumentExtractor") -
         all_truths.extend(result.truths)
         all_entities.extend(result.entities)
         all_relationships.extend(result.relationships)
+
+        # Report progress to caller
+        if progress_callback is not None:
+            try:
+                await progress_callback({
+                    "event": "section_complete",
+                    "sections_completed": idx + 1,
+                    "sections_total": len(inp.sections),
+                    "truths_count": len(truth_dicts),
+                    "entities_count": len(entity_dicts),
+                })
+            except Exception:
+                pass  # never let callback errors break extraction
 
     if failed_sections:
         logger.warning(
