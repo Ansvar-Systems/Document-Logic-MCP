@@ -42,6 +42,7 @@ Thumbs.db
 
 # MCP specific
 data/
+!data/coverage.json
 *.db
 *.db-shm
 *.db-wal

@@ -1,22 +1,24 @@
 # Disclaimer
 
-## Not Legal Advice
+## Purpose
 
-This MCP server provides reference information about Document Logic Mcp legislation. **Nothing in this server constitutes legal, regulatory, or compliance advice.**
+This MCP server is a **document extraction utility**. It processes caller-supplied documents and returns structured data (facts, entities, relationships) extracted via LLM. It does not provide legal, regulatory, compliance, or professional advice of any kind.
 
-The information is compiled from publicly available official sources. It may be incomplete, outdated, or inaccurate. Legislation is amended regularly, and the data in this server is a point-in-time snapshot.
+## No Warranty on Extracted Data
+
+Extraction results are produced by an LLM and may be incomplete, inaccurate, or contain hallucinations. Always verify extracted facts against the original source document before relying on them for decisions.
 
 ## No Substitute for Professional Guidance
 
-Before making legal or compliance decisions based on information from this server:
+Before making decisions based on information extracted by this server:
 
-1. **Consult the official government gazette** or legislative portal
-2. **Engage qualified legal counsel** with jurisdiction-specific expertise
-3. **Verify current legislation status** directly with official sources
+1. **Review the original document** to verify extracted facts
+2. **Engage qualified professionals** for domain-specific interpretation
+3. **Do not rely solely on automated extraction** for high-stakes decisions
 
 ## No Warranty
 
-THE SOFTWARE AND DATA ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
 
 IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
@@ -24,10 +26,9 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMA
 
 The authors, contributors, and Ansvar Systems accept no liability for:
 
-- Errors, omissions, or inaccuracies in the legislative data
-- Decisions made based on information from this server
+- Errors, omissions, or inaccuracies in extracted data
+- Decisions made based on information returned by this server
 - Financial, legal, or other losses arising from use of this software
-- Changes in legislation not yet reflected in the database
 
 ## Open Source
 
