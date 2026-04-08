@@ -307,4 +307,4 @@ Use local Ollama models for faster extraction (no rate limits, network latency).
 
 ## License
 
-MIT
+Apache 2.0
