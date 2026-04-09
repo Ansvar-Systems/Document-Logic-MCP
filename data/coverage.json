@@ -1,0 +1,41 @@
+{
+  "$schema": "https://ansvar.eu/schemas/mcp-coverage/v1",
+  "server": "document-logic-mcp",
+  "version": "0.1.0",
+  "type": "stateless_extraction_utility",
+  "description": "Stateless document intelligence extraction. No static corpus — processes caller-supplied documents.",
+  "supported_formats": [
+    { "extension": ".pdf",  "description": "PDF (text + OCR fallback)" },
+    { "extension": ".docx", "description": "Microsoft Word" },
+    { "extension": ".xlsx", "description": "Microsoft Excel" },
+    { "extension": ".pptx", "description": "Microsoft PowerPoint" },
+    { "extension": ".html", "description": "HTML" },
+    { "extension": ".htm",  "description": "HTML" },
+    { "extension": ".txt",  "description": "Plain text" },
+    { "extension": ".md",   "description": "Markdown" },
+    { "extension": ".csv",  "description": "CSV" },
+    { "extension": ".json", "description": "JSON" },
+    { "extension": ".png",  "description": "Image (OCR)" },
+    { "extension": ".jpg",  "description": "Image (OCR)" },
+    { "extension": ".jpeg", "description": "Image (OCR)" },
+    { "extension": ".tiff", "description": "Image (OCR)" },
+    { "extension": ".bmp",  "description": "Image (OCR)" }
+  ],
+  "analysis_contexts": [
+    {
+      "id": "stride_threat_modeling",
+      "description": "STRIDE threat model extraction: components, trust boundaries, threats, mitigations"
+    },
+    {
+      "id": "tprm_vendor_assessment",
+      "description": "Third-party risk management: vendor controls, compliance posture, risk indicators"
+    },
+    {
+      "id": "compliance_mapping",
+      "description": "Compliance mapping: control references, policy statements, regulatory citations"
+    }
+  ],
+  "terminology_entry_count": 102,
+  "static_corpus": false,
+  "note": "Coverage depends entirely on documents submitted by the caller. No pre-indexed corpus exists."
+}

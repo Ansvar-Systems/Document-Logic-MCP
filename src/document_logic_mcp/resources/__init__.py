@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+_TERMINOLOGY_PATH = Path(__file__).parent / "technology_terminology.json"
 _TERMINOLOGY_DATA = None
 _ALIAS_INDEX = None
 
@@ -15,7 +16,7 @@ def _load_terminology():
     if _TERMINOLOGY_DATA is not None:
         return
 
-    path = Path(__file__).parent / "technology_terminology.json"
+    path = _TERMINOLOGY_PATH
     with open(path) as f:
         _TERMINOLOGY_DATA = json.load(f)
 

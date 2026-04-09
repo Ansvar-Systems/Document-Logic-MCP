@@ -75,6 +75,23 @@ app = FastAPI(
 )
 
 
+# --- _meta helper ---
+_SERVER_VERSION = "0.1.0"
+_META_DISCLAIMER = (
+    "Extraction results are produced by an LLM and may be incomplete or inaccurate. "
+    "Verify against the original source document before relying on extracted data."
+)
+
+
+def _meta_block() -> Dict[str, Any]:
+    """Return standard _meta block for inclusion in tool responses."""
+    return {
+        "disclaimer": _META_DISCLAIMER,
+        "source": "document-logic-mcp",
+        "version": _SERVER_VERSION,
+    }
+
+
 # --- Unauthenticated health check (override removes app-level auth dependency) ---
 _health_router = APIRouter(dependencies=[])
 
@@ -117,6 +134,91 @@ async def health_check():
 
     details["status"] = status
     return details
+
+
+@_health_router.get("/about")
+async def about():
+    """Server metadata: name, version, capabilities, runtime (no authentication required)."""
+    return {
+        "server": "document-logic-mcp",
+        "version": "0.1.0",
+        "description": "Structured document intelligence extraction with citations",
+        "runtime": "Python",
+        "capabilities": [
+            "parse-content",
+            "parse-file",
+            "extract-stateless",
+            "resolve-technology-name",
+            "suggest-terminology-addition",
+        ],
+        "stateless_mode": True,
+        "legacy_endpoints_enabled": LEGACY_ENDPOINTS_ENABLED,
+        "_meta": _meta_block(),
+    }
+
+
+@_health_router.get("/list-sources")
+async def list_sources():
+    """List data sources used by this server (no authentication required).
+
+    This is a stateless extraction utility — it processes caller-supplied documents and
+    has no static corpus. The only bundled resource is the technology terminology JSON.
+    """
+    from .resources import _TERMINOLOGY_PATH
+
+    entry_count: Optional[int] = None
+    try:
+        import json as _json
+        data = _json.loads(_TERMINOLOGY_PATH.read_text())
+        entry_count = len(data.get("entries", []))
+    except Exception:
+        pass
+
+    return {
+        "sources": [
+            {
+                "id": "technology_terminology",
+                "type": "bundled_json",
+                "description": "Technology canonical name and alias mapping resource",
+                "path": "src/document_logic_mcp/resources/technology_terminology.json",
+                "entry_count": entry_count,
+            }
+        ],
+        "note": (
+            "This server is a stateless extraction utility. "
+            "It processes caller-supplied documents and returns structured results. "
+            "No static legislative or reference corpus is included."
+        ),
+        "_meta": _meta_block(),
+    }
+
+
+@_health_router.get("/check-data-freshness")
+async def check_data_freshness():
+    """Report freshness of the technology terminology resource (no authentication required)."""
+    import datetime
+    from .resources import _TERMINOLOGY_PATH
+
+    terminology_info: Dict[str, Any] = {"status": "unknown"}
+    try:
+        import json as _json
+        stat = _TERMINOLOGY_PATH.stat()
+        data = _json.loads(_TERMINOLOGY_PATH.read_text())
+        terminology_info = {
+            "last_modified": datetime.datetime.fromtimestamp(
+                stat.st_mtime, tz=datetime.timezone.utc
+            ).isoformat(),
+            "entry_count": len(data.get("entries", [])),
+            "status": "ok",
+        }
+    except Exception as exc:
+        terminology_info = {"status": f"error: {type(exc).__name__}"}
+
+    return {
+        "terminology_resource": terminology_info,
+        "server_version": "0.1.0",
+        "_meta": _meta_block(),
+    }
 
 
 app.include_router(_health_router)
@@ -258,6 +360,7 @@ async def parse_content(request: ParseContentRequest) -> Dict[str, Any]:
             )
             # Override filename with original name
             result["filename"] = request.filename
+            result["_meta"] = _meta_block()
             return result
         finally:
             # Clean up temporary file
@@ -292,6 +395,7 @@ async def parse_file(request: ParseFileRequest) -> Dict[str, Any]:
             db_path=_get_db_path(),
         )
         result["filename"] = request.filename
+        result["_meta"] = _meta_block()
         return result
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -411,6 +515,7 @@ async def extract_stateless(
                 "overview": output.overview,
                 "synthesis": output.synthesis,
                 "metadata": output.metadata,
+                "_meta": _meta_block(),
             },
             headers={"X-Extraction-Schema-Version": body.schema_version},
         )
@@ -679,6 +784,7 @@ async def resolve_technology_name(request: ResolveTechnologyNameRequest) -> Dict
     """
     try:
         result = await resolve_technology_name_tool(raw_name=request.raw_name)
+        result["_meta"] = _meta_block()
         return result
     except Exception as e:
         logger.error(f"Resolve technology name failed: {e}")
@@ -700,6 +806,7 @@ async def suggest_terminology_addition(request: SuggestTerminologyAdditionReques
             context=request.context,
             db_path=_get_db_path(),
         )
+        result["_meta"] = _meta_block()
         return result
     except Exception as e:
         logger.error(f"Suggest terminology addition failed: {e}")
